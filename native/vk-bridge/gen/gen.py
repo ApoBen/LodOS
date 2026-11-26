@@ -3,6 +3,7 @@
 
 usage: gen.py <vk.xml> <cmds.txt> <outdir>
 emits: vkb_cmds.h, vkb_marshal.h, vkb_marshal.c, vkb_test_gen.c (fill/eq/roundtrip helpers)
+       + RPC layer (rpcgen.py): vkb_rpc.h, vkb_rpc_common.c, vkb_rpc_client.c, vkb_rpc_server.c
 
 Wire format (host-endian, 64-bit host assumed):
   cmd header: u32 VKB_CMD_<cmd>
@@ -69,6 +70,8 @@ class Reg:
         root = ET.parse(path).getroot()
         self.cat = {}
         self.alias = {}
+        self.objtype = {}
+        self.ret = {}
         self.structs = {}
         for t in root.find('types').findall('type'):
             if not api_ok(t):
@@ -80,6 +83,8 @@ class Reg:
                 self.alias[name] = t.get('alias')
                 continue
             self.cat[name] = t.get('category')
+            if t.get('objtypeenum'):
+                self.objtype[name] = t.get('objtypeenum')
             if t.get('category') in ('struct', 'union'):
                 self.structs[name] = [Decl(m) for m in t.findall('member') if api_ok(m)]
         self.cmds = {}
@@ -93,6 +98,7 @@ class Reg:
                 continue
             nm = proto.find('name').text
             self.cmds[nm] = [Decl(p) for p in c.findall('param') if api_ok(p)]
+            self.ret[nm] = proto.find('type').text
 
     def res(self, t):
         while t in self.alias:
@@ -518,6 +524,9 @@ def main():
     t += ['    { "%s", vkb_rt_%s },' % (c, c) for c in ok]
     t += ['};', '#define VKB_RT_COUNT (sizeof(vkb_rt_table) / sizeof(vkb_rt_table[0]))', '']
     open(os.path.join(out, 'vkb_test_gen.c'), 'w').write('\n'.join(t))
+
+    import rpcgen
+    rpcgen.emit(reg, Gen, Unsupported, cmds, out, hdr)
 
     print('gen.py: %d cmds ok, %d stub, %d structs -> %s' % (len(ok), len(bad), len(g.used_structs), out))
     for c, why in bad.items():

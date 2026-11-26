@@ -1,0 +1,7 @@
+# T018 e2e v0 command subset (client <-> server over transport)
+vkEnumerateInstanceVersion
+vkCreateInstance
+vkEnumeratePhysicalDevices
+vkGetPhysicalDeviceProperties
+vkGetPhysicalDeviceQueueFamilyProperties
+vkDestroyInstance
