@@ -8,6 +8,7 @@ models: default=gemini-4-neon-high | hard=gemini-4-carbon-high | trivial=gemini-
 rules: minimize claude tokens; never re-read chat history; this file = source of truth; daily checklist -> ~/Masaüstü/LodOS-YYYY-MM-DD.md
 orch: orch/run.sh loop(next todo task->agy->accept script->git commit; last attempt=carbon; max fail->blocked) | review.sh=claude -p checkpoint every 2 done/blocked or when queue empty (cooldown 1h on claude limit) | checklist.sh->desktop | tasks: orch/tasks/T###.md (FORMAT.md) accept: orch/accept/
 shutdown policy: claude limit -> NO shutdown, continue agy | agy quota OR no runnable work -> notify 5min w/ cancel -> systemctl poweroff | touch orch/NO_SHUTDOWN disables
+phone keeper: lodos-phone.service (orch/phone/watch.sh) runs keeper.sh on phone: brightness 0 after 5min no input while work active; restores on input/unplug/screen-off
 sudo: none given; agents write NEEDS_ROOT in NOTES -> status user -> user runs cmd
 
 ## GOAL
@@ -28,6 +29,7 @@ D6 GPU mali: Vortek-like bridge (guest glibc vulkan ICD -> IPC -> host bionic Ma
 D7 compat: box64 primary, FEX experimental; wine ARM64EC + fex/box64 wow64
 D8 game mode: per-game fps cap, thermal-headroom auto fps (Android thermal API), PerformanceHint, FSR scale, mangohud, touch controls, profiles (Hades first)
 D9 dist: github releases + f-droid + obtainium; google dev-verification handled at release time
+D11 langs: Kotlin=android app/UI/lifecycle | Rust=new native daemons (wayland host via smithay, audio bridge, mini-init/logind shim, launcher, IPC) via cargo-ndk | C=vulkan ICD/bridge + patches to existing C projects (proot, mesa, box64)
 D10 own repo of custom builds (mesa/zink, bridge, box64, fex, wine, dxvk)
 
 ## HARD LIMITS (unsolvable rootless)

@@ -12,7 +12,7 @@ ctx: /mnt/SSD/LodOS/ai.md = project state (read GOAL/DECISIONS/ENV only if neede
 
 ## phone (adb -s <phone-serial>, POCO X7 Pro, NOT rooted, user's personal phone)
 allowed: install/uninstall/am start/force-stop/dumpsys/logcat for packages `org.lodos*` only; push/exec under /data/local/tmp/lodos/ only; getprop; read-only system info (dumpsys SurfaceFlinger/gpu, /proc, vulkan info).
-forbidden: other apps' data, /sdcard user files, settings put, pm clear/uninstall of non-org.lodos pkgs, reboot, input injection outside our app, anything irreversible.
+forbidden: touching orch/phone/* or /data/local/tmp/lodos/{keeper*,work,saved} or screen brightness; other apps' data, /sdcard user files, settings put, pm clear/uninstall of non-org.lodos pkgs, reboot, input injection outside our app, anything irreversible.
 
 ## output
 at end append to your task file:
