@@ -1,0 +1,96 @@
+diff --git a/meson.build b/meson.build
+index cab411e..d93c40e 100644
+--- a/meson.build
++++ b/meson.build
+@@ -1717,7 +1717,7 @@ with_gallium_drisw_kms = false
+ if system_has_kms_drm
+   dep_libdrm = dependency(
+     'libdrm', version : '>=' + _drm_ver,
+-    required : with_dri2 or with_dri3
++    required : (with_dri2 or with_dri3) and host_machine.system() != 'android'
+   )
+ else
+   # We should prevent libdrm from being available when the target doesn't have it to avoid transitive
+diff --git a/src/vulkan/meson.build b/src/vulkan/meson.build
+index f54b6b4..7b71c41 100644
+--- a/src/vulkan/meson.build
++++ b/src/vulkan/meson.build
+@@ -54,7 +54,7 @@ if with_platform_wayland
+   vulkan_wsi_deps += dep_wayland_client
+   vulkan_wsi_list += '-DVK_USE_PLATFORM_WAYLAND_KHR'
+ endif
+-if system_has_kms_drm and not with_platform_android
++if system_has_kms_drm and not with_platform_android and dep_libdrm.found()
+   vulkan_wsi_deps += [dep_libdrm]
+   vulkan_wsi_list += '-DVK_USE_PLATFORM_DISPLAY_KHR'
+ endif
+diff --git a/src/vulkan/wrapper/adrenotools_stub.c b/src/vulkan/wrapper/adrenotools_stub.c
+new file mode 100644
+index 0000000..e2f6021
+--- /dev/null
++++ b/src/vulkan/wrapper/adrenotools_stub.c
+@@ -0,0 +1,13 @@
++/* LodOS: libadrenotools is not linked (Mali target); custom-driver loading disabled. */
++#include <stddef.h>
++#include "wrapper_private.h"
++
++void *adrenotools_open_libvulkan(int dlopenMode, int featureFlags, const char *tmpLibDir,
++                                 const char *hookLibDir, const char *customDriverDir,
++                                 const char *customDriverName, const char *fileRedirectDir,
++                                 void **userMappingHandle)
++{
++   (void)dlopenMode; (void)featureFlags; (void)tmpLibDir; (void)hookLibDir;
++   (void)customDriverDir; (void)customDriverName; (void)fileRedirectDir; (void)userMappingHandle;
++   return NULL;
++}
+diff --git a/src/vulkan/wrapper/meson.build b/src/vulkan/wrapper/meson.build
+index 5baeac5..1b11b3c 100644
+--- a/src/vulkan/wrapper/meson.build
++++ b/src/vulkan/wrapper/meson.build
+@@ -124,6 +124,7 @@ wrapper_files = files(
+   'graphics_env_hooks.cpp',
+   'artifacts.cpp',
+   'bcdec.c',
++  'adrenotools_stub.c',
+ )
+ 
+ wrapper_deps = [
+diff --git a/src/vulkan/wrapper/vk_unwrapper_gen.py b/src/vulkan/wrapper/vk_unwrapper_gen.py
+index 020057c..7e40b59 100644
+--- a/src/vulkan/wrapper/vk_unwrapper_gen.py
++++ b/src/vulkan/wrapper/vk_unwrapper_gen.py
+@@ -186,6 +186,9 @@ VK_TYPES_BLACKLIST = [
+     'VkSysmemColorSpaceFUCHSIA',
+     'VkViSurfaceCreateInfoNN',
+     'VkWaylandSurfaceCreateInfoKHR',
++    # LodOS: built without X11 WSI
++    'VkXcbSurfaceCreateInfoKHR',
++    'VkXlibSurfaceCreateInfoKHR',
+     'VkWin32KeyedMutexAcquireReleaseInfoKHR',
+     'VkWin32KeyedMutexAcquireReleaseInfoNV',
+     'VkWin32SurfaceCreateInfoKHR',
+diff --git a/src/vulkan/wrapper/wrapper_private.h b/src/vulkan/wrapper/wrapper_private.h
+index a7a2183..6153066 100644
+--- a/src/vulkan/wrapper/wrapper_private.h
++++ b/src/vulkan/wrapper/wrapper_private.h
+@@ -1,6 +1,7 @@
+ #pragma once
+ 
+ #include <sys/stat.h>
++#include <fcntl.h>
+ 
+ #include "util/simple_mtx.h"
+ #include "vulkan/runtime/vk_instance.h"
+diff --git a/src/vulkan/wsi/meson.build b/src/vulkan/wsi/meson.build
+index 83487f0..4a740d7 100644
+--- a/src/vulkan/wsi/meson.build
++++ b/src/vulkan/wsi/meson.build
+@@ -33,7 +33,7 @@ else
+   files_vulkan_wsi += files('wsi_common_headless.c')
+ endif
+ 
+-if system_has_kms_drm and not with_platform_android
++if system_has_kms_drm and not with_platform_android and dep_libdrm.found()
+   files_vulkan_wsi += files('wsi_common_display.c')
+ endif
+ 
