@@ -1,0 +1,15 @@
+# Third-Party Code & Reference Repositories
+
+All third-party repositories cloned into `third_party/src/` (gitignored) or referenced by LodOS are verified to be **GPL-3.0-compatible**.
+
+| Name | Source URL | Branch / Ref | Commit Hash | License | GPL-3.0 Compatible | Role in LodOS |
+| :--- | :--- | :--- | :--- | :--- | :--- | :--- |
+| `winlator` | `https://github.com/brunodev85/winlator.git` | `main` | `30aafbdb9eea47b92669201621e03cd2cf04540d` | `LGPL-2.1` | Yes (LGPL-2.1 §3) | Reference umbrella repo (`vortek`, `winlator-app`, `gladio` submodules) |
+| `winlator-app` (`vortekrenderer`) | `https://github.com/brunodev85/winlator-app.git` | `main` | `a030f552f452158a2db64fdb32b490fa19c0b48d` | `LGPL-2.1` (with `Apache-2.0` SwiftShader-derived `bc_decoder.h` & `MIT` `libadrenotools`) | Yes | Reference implementation for Vortek server, Zink/Mali quirk filters, and AHB/dma_heap fd allocation |
+| `vortek` | `https://github.com/brunodev85/vortek.git` | `main` | `4e0d790ef8afee4766b40e194bc82d2505d5ea0f` | `LGPL-2.1` | Yes (LGPL-2.1 §3) | Reference implementation for guest `glibc` Vulkan IPC ring-buffer & `vkCmd*` command batching |
+| `gladio` | `https://github.com/brunodev85/gladio.git` | `main` | `116c0d14dedbea3bd057f98f1db138bb1efe225e` | `LGPL-2.1` | Yes (LGPL-2.1 §3) | Winlator submodule cloned with `brunodev85/winlator` |
+| `xMeM/mesa` (`vulkan-wrapper-android`) | `https://github.com/xMeM/mesa.git` | `wrapper` | `e65c7eb6ee2f9903c3256f2677beb1d98464103f` | `MIT` (Mesa component licenses) | Yes | Upstream source of Termux's Android Bionic Vulkan wrapper ICD & `AHardwareBuffer` WSI |
+| `bionic-vulkan-wrapper` | `https://github.com/leegao/bionic-vulkan-wrapper.git` | `main` | `3abf48704a4d9303967a0811c0dc8ff8567d613b` | `MIT` (Mesa + compute BC1–BC7 shaders by Hans-Kristian Arntzen & Lee Gao) + `MIT OR Unlicense` (`bcdec.h`) + `Apache-2.0` (`SPIRV-Tools`) | Yes | Host-side Bionic Mali wrapper layer (GPU compute BC1–BC7 decompression, Mali SPIR-V passes, VMA `prefersDedicatedAllocation` fix, `dma_heap`/`AHardwareBuffer` backing) |
+| `vortek-deep-dive` | `https://github.com/leegao/vortek-deep-dive.git` | `master` | `e8b2b85bae8859bce8ba26c2967cffa5336811a5` | `MIT` | Yes | Protocol analysis notes for Vortek IPC |
+| `termux-x11` | `https://github.com/termux/termux-x11.git` | `master` | `24ce2076fe68eff1599da286c5c162f7693c0501` | `GPL-3.0` | Yes | Reference for Android `AHardwareBuffer` / `SurfaceView` present handling (`lorie`) |
+| `proot` (Termux fork) | `https://github.com/termux/proot.git` | `master` | `c0b2d098469a64a88c0a7e240b1a1dc252988cdb` | `GPL-2.0-or-later` | Yes | Rootless guest container execution & `AF_UNIX` path translation (`ai.md` D4) |
