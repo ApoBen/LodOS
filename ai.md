@@ -40,7 +40,7 @@ D10 own repo of custom builds (mesa/zink, bridge, box64, fex, wine, dxvk)
 real systemd; flatpak/snap/docker/podman (no userns); kernel anticheat; VA-API hw decode; raw sockets/<1024 ports/vpn/kmods; direct usb/bt; 16K-page devices problematic (future)
 
 ## RISKS
-R1 mali vulkan bridge glibc<->bionic (boundary proven T019; remaining: full API surface/pNext/memory) | R2 mali lacks BCn etc -> transcode | R3 own wayland host | R4 mutter can't nest in wayland -> headless+pipewire or patch | R5 fex under proot | R6 phantom process killer -> onboarding guide | R7 HyperOS blocks 1st adb install (guardprovider missing; manual 1st install worked) -> end users may hit MIUI restrictions | R8 app-uid: nativeLibDir exec + dma_heap ok (T017/T020) CLOSED | R10 proot rootfs+apt at app uid OK (T020) CLOSED; first-run extract slow 199s (T026) | R11 Mali DMA_BUF export broken (getMemoryFd fd=-1) -> export only via AHB; dma_heap ok at app uid | R12 vk-layer ICD handles (loader magic) -> bridge must use vk_icdGetInstanceProcAddr; libcutils non-NDK (T014) | R13 shell uid can't bind path AF_UNIX (SELinux); app uid OK (T017) -> abstract/unix2abstract only for adb spikes | R14 ring spin vs futex: short spin -> 100x latency; need adaptive spin/per-thread tuning (power) | R15 proot cgroup2 ro -> elogind no sessions/polkit (T025) | R9 lxc rootfs URLs rotate ~3d -> fetch script resolves latest; pin own mirror for release
+R1 mali vulkan bridge glibc<->bionic (boundary proven T019; remaining: full API surface/pNext/memory) | R2 mali lacks BCn etc -> transcode | R3 own wayland host (shm CPU path ok T022; zero-copy AHB/dmabuf pending) | R4 mutter can't nest in wayland -> headless+pipewire or patch | R5 fex under proot | R6 phantom process killer -> onboarding guide | R7 HyperOS blocks 1st adb install (guardprovider missing; manual 1st install worked) -> end users may hit MIUI restrictions | R8 app-uid: nativeLibDir exec + dma_heap ok (T017/T020) CLOSED | R10 proot rootfs+apt at app uid OK (T020) CLOSED; first-run extract slow 199s (T026) | R11 Mali DMA_BUF export broken (getMemoryFd fd=-1) -> export only via AHB; dma_heap ok at app uid | R12 vk-layer ICD handles (loader magic) -> bridge must use vk_icdGetInstanceProcAddr; libcutils non-NDK (T014) | R13 shell uid can't bind path AF_UNIX (SELinux); app uid OK (T017) -> abstract/unix2abstract only for adb spikes | R14 ring spin vs futex: short spin -> 100x latency; need adaptive spin/per-thread tuning (power) | R15 proot cgroup2 ro -> elogind no sessions/polkit (T025) | R9 lxc rootfs URLs rotate ~3d -> fetch script resolves latest; pin own mirror for release
 
 ## PHASES
 P0 spikes: S1 mali bridge vkcube+zink glxgears | S2 wayland host+nested phoc+zero-copy | S3 phosh/gnome48 w/ elogind+mini-init (+test systemd --user standalone) | S4 box64+wine arm64ec in proot, Hades
@@ -73,16 +73,19 @@ P5 generalize + github + CI
 [x] T019 glibc client in proot -> bionic server OK (R1 boundary proven; no proot overhead on spin path)
 [x] T020 app-uid rootfs ok (same proot flags, +INTERNET perm); dma_heap open+alloc ok at app uid; cold extract 199s (slow)
 [x] T021 S3 init: sysvinit+elogind, system bus+login1 ok, phosh login1-warn=0; no sessions (cgroup ro), Inhibit FileNotFound
-[ ] T022 S2 v0: lodos-wl JNI -> SurfaceView, guest wl_shm green pixels via screencap (carbon)
-[ ] T023 S1 guest Vulkan ICD v0 (loader magic, props2 pNext) -> guest vulkaninfo shows Mali (carbon)
+[x] T022 S2 v0: lodos-wl JNI->SurfaceView, wl_shm green ok; CPU copy 512² ~1.5-2ms, 60fps vsync
+[x] T023 S1 guest ICD v0: vulkaninfo --summary shows Mali-G720 (35 cmds, 119 calls); GDPA cmds missing
 [ ] T024 S4 v0: box64 in proot, x86_64 hello/bash + bench (neon)
 [ ] T025 S3 sessions: fake writable cgroup -> loginctl session + Inhibit (neon)
 [ ] T026 P1 native rootfs extract in APK <60s cold (Rust, neon)
+[ ] T027 S1 v1: guest compute+offscreen triangle via bridge, shared mapped mem, batched cmdbufs (carbon)
+[ ] T028 S2 v1: app-uid proot guest wl_shm client (weston-simple-shm) -> DisplayActivity (neon)
 (live status: task files frontmatter)
 
 ## OPEN (need user)
 
 ## LOG (newest first, 1 line each)
+2026-11-27 review11: T022,T023 ok (carbon, accept PASS: green pixels, guest vulkaninfo Mali); untracked __pycache__; +T027 vk work, T028 guest display
 2026-11-27 review10: T020,T021 ok (agy neon, accept PASS); +T024 box64, T025 elogind sessions, T026 fast extract
 2026-11-27 review9: T018,T019 ok (accept PASS, Mali via proot glibc client); +T023 guest ICD
 2026-11-27 review8: T016,T017 ok (accept PASS); +T020 app-uid rootfs, T021 elogind init, T022 first pixels

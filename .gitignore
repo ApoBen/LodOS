@@ -11,3 +11,5 @@ local.properties
 .cxx/
 .idea/
 native/*/target/
+__pycache__/
+*.pyc
