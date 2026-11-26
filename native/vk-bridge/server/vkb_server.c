@@ -63,13 +63,19 @@ void vkr_h_drop(void *hctx, VkObjectType t, uint64_t h) {
     htab *ht = hctx;
     for (uint32_t i = 0; i < ht->n; i++)
         if (ht->e[i].h == h && ht->e[i].t == t) ht->e[i] = (hent){ 0, 0 };
-    /* children of a destroyed instance (physical devices) die with it */
+    /* children of a destroyed instance (physical devices) or device (queues) die with it */
     if (t == VK_OBJECT_TYPE_INSTANCE) {
         int live = 0;
         for (uint32_t i = 0; i < ht->n; i++) live |= ht->e[i].t == VK_OBJECT_TYPE_INSTANCE && ht->e[i].h;
         if (!live)
             for (uint32_t i = 0; i < ht->n; i++)
                 if (ht->e[i].t == VK_OBJECT_TYPE_PHYSICAL_DEVICE) ht->e[i] = (hent){ 0, 0 };
+    } else if (t == VK_OBJECT_TYPE_DEVICE) {
+        int live = 0;
+        for (uint32_t i = 0; i < ht->n; i++) live |= ht->e[i].t == VK_OBJECT_TYPE_DEVICE && ht->e[i].h;
+        if (!live)
+            for (uint32_t i = 0; i < ht->n; i++)
+                if (ht->e[i].t == VK_OBJECT_TYPE_QUEUE) ht->e[i] = (hent){ 0, 0 };
     }
 }
 
@@ -133,7 +139,12 @@ static void *client_fn(void *arg) {
     atomic_store(&c->done, 1);
     shutdown(c->sock, SHUT_RDWR);
     pthread_join(c->watcher, NULL);
-    /* leaked instances of a dead/sloppy client */
+    /* leaked devices/instances of a dead/sloppy client */
+#ifdef VKB_HAS_vkDestroyDevice
+    for (uint32_t i = 0; i < ht.n; i++)
+        if (ht.e[i].t == VK_OBJECT_TYPE_DEVICE && ht.e[i].h && g_fns.vkDestroyDevice)
+            g_fns.vkDestroyDevice((VkDevice)(uintptr_t)ht.e[i].h, NULL);
+#endif
     for (uint32_t i = 0; i < ht.n; i++)
         if (ht.e[i].t == VK_OBJECT_TYPE_INSTANCE && ht.e[i].h && g_fns.vkDestroyInstance)
             g_fns.vkDestroyInstance((VkInstance)(uintptr_t)ht.e[i].h, NULL);
@@ -152,7 +163,8 @@ static void *getproc(const char *name, void *ud) {
 }
 
 int main(int argc, char **argv) {
-    const char *name = "lodos-vk";
+    const char *name = getenv("LODOS_VK_SOCK");
+    if (!name || !*name) name = "lodos-vk";
     const char *lib = getenv("LODOS_VK_LIB");
     if (!lib) lib = "libvulkan.so";
     int o;
@@ -165,20 +177,34 @@ int main(int argc, char **argv) {
     g_lib = dlopen(lib, RTLD_NOW | RTLD_LOCAL);
     if (!g_lib) { fprintf(stderr, "vkb_server: dlopen %s: %s\n", lib, dlerror()); return 1; }
     g_gipa = (PFN_vkGetInstanceProcAddr)dlsym(g_lib, "vkGetInstanceProcAddr");
+    if (!g_gipa) g_gipa = (PFN_vkGetInstanceProcAddr)dlsym(g_lib, "vk_icdGetInstanceProcAddr");
     int miss = vkr_srv_load(&g_fns, getproc, NULL);
     if (miss) fprintf(stderr, "vkb_server: warning: %d bridged fns missing in %s\n", miss, lib);
 
     int ls = socket(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0);
     if (ls < 0) { perror("socket"); return 1; }
     struct sockaddr_un a = { .sun_family = AF_UNIX };
-    size_t nl = strlen(name);
-    if (nl + 1 > sizeof a.sun_path) { fprintf(stderr, "name too long\n"); return 1; }
-    memcpy(a.sun_path + 1, name, nl);
-    if (bind(ls, (struct sockaddr *)&a, (socklen_t)(offsetof(struct sockaddr_un, sun_path) + 1 + nl)) < 0) {
+    socklen_t alen;
+    const char *disp = name;
+    if (name[0] == '/') {
+        size_t nl = strlen(name);
+        if (nl + 1 > sizeof a.sun_path) { fprintf(stderr, "name too long\n"); return 1; }
+        unlink(name);
+        memcpy(a.sun_path, name, nl + 1);
+        alen = (socklen_t)(offsetof(struct sockaddr_un, sun_path) + nl + 1);
+    } else {
+        if (name[0] == '@') name++;
+        size_t nl = strlen(name);
+        if (nl + 1 > sizeof a.sun_path) { fprintf(stderr, "name too long\n"); return 1; }
+        memcpy(a.sun_path + 1, name, nl);
+        alen = (socklen_t)(offsetof(struct sockaddr_un, sun_path) + 1 + nl);
+        disp = name;
+    }
+    if (bind(ls, (struct sockaddr *)&a, alen) < 0) {
         perror("bind"); return 1;
     }
     if (listen(ls, 16) < 0) { perror("listen"); return 1; }
-    fprintf(stderr, "vkb_server: listening @%s lib=%s\n", name, lib);
+    fprintf(stderr, "vkb_server: listening %s%s lib=%s\n", name[0] == '/' ? "" : "@", disp, lib);
     for (;;) {
         int s = accept4(ls, NULL, NULL, SOCK_CLOEXEC);
         if (s < 0) { if (errno == EINTR) continue; perror("accept"); return 1; }

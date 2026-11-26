@@ -31,17 +31,28 @@ int vkbc__call(vkbc *c, size_t len, const uint8_t **rep, size_t *replen) {
 }
 
 vkbc *vkbc_connect(const char *name) {
-    if (!name) name = "lodos-vk";
+    if (!name || !*name) name = getenv("LODOS_VK_SOCK");
+    if (!name || !*name) name = "lodos-vk";
     vkbc *c = calloc(1, sizeof *c);
     if (!c) return NULL;
     c->sock = -1; c->c2s.fd = c->s2c.fd = -1;
     struct sockaddr_un a = { .sun_family = AF_UNIX };
-    size_t nl = strlen(name);
-    if (nl + 1 > sizeof a.sun_path) { errno = ENAMETOOLONG; goto fail; }
-    memcpy(a.sun_path + 1, name, nl); /* abstract: leading NUL */
+    socklen_t alen;
+    if (name[0] == '/') {
+        size_t nl = strlen(name);
+        if (nl + 1 > sizeof a.sun_path) { errno = ENAMETOOLONG; goto fail; }
+        memcpy(a.sun_path, name, nl + 1);
+        alen = (socklen_t)(offsetof(struct sockaddr_un, sun_path) + nl + 1);
+    } else {
+        if (name[0] == '@') name++;
+        size_t nl = strlen(name);
+        if (nl + 1 > sizeof a.sun_path) { errno = ENAMETOOLONG; goto fail; }
+        memcpy(a.sun_path + 1, name, nl); /* abstract: leading NUL */
+        alen = (socklen_t)(offsetof(struct sockaddr_un, sun_path) + 1 + nl);
+    }
     c->sock = socket(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0);
     if (c->sock < 0) goto fail;
-    if (connect(c->sock, (struct sockaddr *)&a, (socklen_t)(offsetof(struct sockaddr_un, sun_path) + 1 + nl)) < 0)
+    if (connect(c->sock, (struct sockaddr *)&a, alen) < 0)
         goto fail;
     int rc;
     if ((rc = ring_create(&c->c2s, 0)) < 0 || (rc = ring_create(&c->s2c, 0)) < 0) { errno = -rc; goto fail; }

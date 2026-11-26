@@ -73,6 +73,20 @@ class Reg:
         self.objtype = {}
         self.ret = {}
         self.structs = {}
+        self.structextends = {}
+        self.core_types = set()
+        for f in root.findall('feature'):
+            if api_ok(f):
+                for req in f.findall('require'):
+                    for tp in req.findall('type'):
+                        self.core_types.add(tp.get('name'))
+        for ext in root.find('extensions').findall('extension'):
+            supp = (ext.get('supported') or '').split(',')
+            if 'vulkan' in supp and not ext.get('platform') and not ext.get('provisional'):
+                for req in ext.findall('require'):
+                    if api_ok(req):
+                        for tp in req.findall('type'):
+                            self.core_types.add(tp.get('name'))
         for t in root.find('types').findall('type'):
             if not api_ok(t):
                 continue
@@ -87,6 +101,8 @@ class Reg:
                 self.objtype[name] = t.get('objtypeenum')
             if t.get('category') in ('struct', 'union'):
                 self.structs[name] = [Decl(m) for m in t.findall('member') if api_ok(m)]
+                if t.get('structextends'):
+                    self.structextends[name] = [x for x in t.get('structextends').split(',') if x]
         self.cmds = {}
         for c in root.iter('command'):
             if not api_ok(c):

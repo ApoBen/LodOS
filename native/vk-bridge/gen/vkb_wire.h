@@ -12,6 +12,7 @@
 enum { VKR_OK = 0, VKR_E_BOUNDS, VKR_E_NOMEM, VKR_E_PNEXT, VKR_E_HANDLE, VKR_E_CMD, VKR_E_COUNT };
 
 #define VKR_MAX_ARR 65536u     /* max elements of an out array the server will allocate */
+#define VKR_MAX_PNEXT 256u     /* max nodes in an out pNext chain */
 #define VKR_CMD_BYE 0xffffffffu /* client -> server: close connection */
 
 typedef struct { uint8_t *base; size_t cap, used; } vkr_arena;

@@ -1,0 +1,9 @@
+/* LodOS guest Vulkan ICD: export only Khronos Loader-ICD v5 entrypoints. */
+{
+  global:
+    vk_icdGetInstanceProcAddr;
+    vk_icdNegotiateLoaderICDInterfaceVersion;
+    vk_icdGetPhysicalDeviceProcAddr;
+  local:
+    *;
+};
