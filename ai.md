@@ -40,7 +40,7 @@ D10 own repo of custom builds (mesa/zink, bridge, box64, fex, wine, dxvk)
 real systemd; flatpak/snap/docker/podman (no userns); kernel anticheat; VA-API hw decode; raw sockets/<1024 ports/vpn/kmods; direct usb/bt; 16K-page devices problematic (future)
 
 ## RISKS
-R1 mali vulkan bridge glibc<->bionic (biggest) | R2 mali lacks BCn etc -> transcode | R3 own wayland host | R4 mutter can't nest in wayland -> headless+pipewire or patch | R5 fex under proot | R6 phantom process killer -> onboarding guide | R7 HyperOS blocks 1st adb install (guardprovider missing; manual 1st install worked) -> end users may hit MIUI restrictions | R8 app-uid: nativeLibDir exec ok (T017); dma_heap untested (T020) | R10 proot -r rootfs (link2symlink, sysvipc) only shell-uid tested; apt/dpkg in guest unproven (T011) | R11 Mali DMA_BUF export broken (getMemoryFd fd=-1) -> export only via AHB; app-uid dma_heap untested | R12 vk-layer ICD handles (loader magic) -> bridge must use vk_icdGetInstanceProcAddr; libcutils non-NDK (T014) | R13 shell uid can't bind path AF_UNIX (SELinux); app uid OK (T017) -> abstract/unix2abstract only for adb spikes | R14 ring spin vs futex: short spin -> 100x latency; need adaptive spin/per-thread tuning (power) | R9 lxc rootfs URLs rotate ~3d -> fetch script resolves latest; pin own mirror for release
+R1 mali vulkan bridge glibc<->bionic (boundary proven T019; remaining: full API surface/pNext/memory) | R2 mali lacks BCn etc -> transcode | R3 own wayland host | R4 mutter can't nest in wayland -> headless+pipewire or patch | R5 fex under proot | R6 phantom process killer -> onboarding guide | R7 HyperOS blocks 1st adb install (guardprovider missing; manual 1st install worked) -> end users may hit MIUI restrictions | R8 app-uid: nativeLibDir exec ok (T017); dma_heap untested (T020) | R10 proot -r rootfs (link2symlink, sysvipc) only shell-uid tested; apt/dpkg in guest unproven (T011) | R11 Mali DMA_BUF export broken (getMemoryFd fd=-1) -> export only via AHB; app-uid dma_heap untested | R12 vk-layer ICD handles (loader magic) -> bridge must use vk_icdGetInstanceProcAddr; libcutils non-NDK (T014) | R13 shell uid can't bind path AF_UNIX (SELinux); app uid OK (T017) -> abstract/unix2abstract only for adb spikes | R14 ring spin vs futex: short spin -> 100x latency; need adaptive spin/per-thread tuning (power) | R9 lxc rootfs URLs rotate ~3d -> fetch script resolves latest; pin own mirror for release
 
 ## PHASES
 P0 spikes: S1 mali bridge vkcube+zink glxgears | S2 wayland host+nested phoc+zero-copy | S3 phosh/gnome48 w/ elogind+mini-init (+test systemd --user standalone) | S4 box64+wine arm64ec in proot, Hades
@@ -69,16 +69,18 @@ P5 generalize + github + CI
 [x] T015 transport v0: memfd SPSC ring+futex, SEQPACKET SCM_RIGHTS; phone 1.8GB/s, p50 0.39us (spin-dependent; futex path slow ~113us)
 [x] T016 S3: phosh/phoc in guest; headless phoc+phosh alive via native/unix2abstract LD_PRELOAD; elogind conflicts systemd (dbus-user-session)
 [x] T017 app-uid: jniLibs exec ok, proot -0 ok, path AF_UNIX bind in filesDir ok (R13 shell-only)
-[ ] T018 vk-bridge e2e v0: 6 cmds client->server @lodos-vk on Mali, handle map/replies (carbon)
-[ ] T019 guest glibc client in proot -> bionic server (R1 proof; deps T018)
+[x] T018 vk-bridge e2e v0: rpcgen, handle table, Mali e2e; p50 3-5us
+[x] T019 glibc client in proot -> bionic server OK (R1 boundary proven; no proot overhead on spin path)
 [ ] T020 app-uid rootfs: proot -r trixie + apt + dma_heap probe in APK (R10/R8; neon)
 [ ] T021 S3 init: systemd-sysv->elogind swap, system bus, login1 (D3; neon)
 [ ] T022 S2 v0: lodos-wl JNI -> SurfaceView, guest wl_shm green pixels via screencap (carbon)
+[ ] T023 S1 guest Vulkan ICD v0 (loader magic, props2 pNext) -> guest vulkaninfo shows Mali (carbon)
 (live status: task files frontmatter)
 
 ## OPEN (need user)
 
 ## LOG (newest first, 1 line each)
+2026-11-27 review9: T018,T019 ok (accept PASS, Mali via proot glibc client); +T023 guest ICD
 2026-11-27 review8: T016,T017 ok (accept PASS); +T020 app-uid rootfs, T021 elogind init, T022 first pixels
 2026-11-27 review7: T014,T015 ok (accept PASS on phone); +T018 vk e2e, T019 glibc client; R14
 2026-11-27 review6: T012 unblocked (locale bug, fixed run.sh:105 LC_ALL=C) -> done; T013 ok; +T017 app-uid probe
