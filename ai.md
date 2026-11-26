@@ -1,12 +1,14 @@
 # ai.md — LodOS state (AI-oriented, terse; read FIRST, update after every step)
 
 ## META
-created:2026-11-26 | lang(user):tr | status:PRE-START (awaiting user go; orchestration not built)
+created:2026-11-26 | lang(user):tr | status:RUNNING via systemd --user lodos.service (orch/run.sh)
 roles: claude=coordinator/reviewer ONLY | agy=implementer
 agy:~/.gemini/bin/agy -p "<task>" --model M --output-format json --dangerously-skip-permissions --add-dir /mnt/SSD/LodOS
 models: default=gemini-4-neon-high | hard=gemini-4-carbon-high | trivial=gemini-4-neon-low
 rules: minimize claude tokens; never re-read chat history; this file = source of truth; daily checklist -> ~/Masaüstü/LodOS-YYYY-MM-DD.md
-user_req: autostart on boot; auto-shutdown when credits exhausted (details TBD, see OPEN)
+orch: orch/run.sh loop(next todo task->agy->accept script->git commit; last attempt=carbon; max fail->blocked) | review.sh=claude -p checkpoint every 2 done/blocked or when queue empty (cooldown 1h on claude limit) | checklist.sh->desktop | tasks: orch/tasks/T###.md (FORMAT.md) accept: orch/accept/
+shutdown policy: claude limit -> NO shutdown, continue agy | agy quota OR no runnable work -> notify 5min w/ cancel -> systemctl poweroff | touch orch/NO_SHUTDOWN disables
+sudo: none given; agents write NEEDS_ROOT in NOTES -> status user -> user runs cmd
 
 ## GOAL
 single APK, rootless, NO termux, NO termux-x11. Full Linux on Android: GPU accel, wayland, GNOME-family UI (touch like ubuntu-touch), apt, x86_64 linux apps (box64/fex), wine, game mode. Order: phone -> tablet -> generalize -> github (GPL-3).
@@ -43,14 +45,12 @@ P4 tablet (turnip, gnome, dex)
 P5 generalize + github + CI
 
 ## TASKS (queue) [ ]=todo [~]=doing [x]=done
-[ ] T0 orchestration: git init, CLAUDE.md/GEMINI.md pointers, runner script, systemd user units (autostart), credit/limit detection, shutdown policy, daily checklist gen
-[ ] T1 toolchain: install NDK r27+, cmake, verify adb, create android project skeleton
-[ ] T2 S1 research: inspect winlator vortek + termux vulkan wrapper sources/licenses
-...
+[x] T000 orchestration (claude, 2026-11-26)
+[ ] T001 toolchain ndk27+/cmake/env.sh | [ ] T002 app skeleton org.lodos.app on phone | [ ] T003 S1 research gpu bridge (carbon) | [ ] T004 vkprobe mali features
+(live status: task files frontmatter)
 
 ## OPEN (need user)
-- shutdown trigger: which quota (claude/agy/both)? grace period?
-- confirm autonomy scope for agents on phone via adb
 
 ## LOG (newest first, 1 line each)
-2026-11-26 seeded ai.md; plan agreed; awaiting go
+2026-11-26 T000 orchestration built, service enabled, T001-T004 queued
+2026-11-26 seeded ai.md; plan agreed
