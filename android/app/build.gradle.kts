@@ -49,6 +49,14 @@ android {
         jvmTarget = "17"
     }
 
+    // D4/T017: exec binaries shipped as lib*.so must exist on disk in nativeLibraryDir
+    packaging {
+        jniLibs {
+            useLegacyPackaging = true
+            keepDebugSymbols += listOf("**/libproot.so", "**/libproot_loader.so", "**/liblodos_wl.so")
+        }
+    }
+
     externalNativeBuild {
         cmake {
             path = file("src/main/cpp/CMakeLists.txt")
