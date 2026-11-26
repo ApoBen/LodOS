@@ -20,6 +20,7 @@ phone(P1): POCO X7 Pro "rodin" 2412DPC0AG, adb serial <phone-serial> usb, Dimens
 tablet(P2): Tab S9 Ultra, SD8G2/Adreno740, no root
 
 ## DECISIONS (D#)
+D13 S1 bridge per T003: IPC (no in-process libhybris); host=bionic-vulkan-wrapper (BCn compute, Mali fixes) + own vk.xml-generated C bridge w/ per-thread shm rings + SCM_RIGHTS
 D1 base distro=Debian 13 (elogind avail, GNOME48 still non-systemd builtin mode, Mobian proves phosh). fedora/arch later as alt rootfs.
 D2 UI: phone=Phosh(phoc/wlroots nested) | tablet=GNOME (risk R4) | fallback=Plasma Mobile
 D3 no systemd: mini-init + dbus + elogind + systemctl-shim
@@ -37,7 +38,7 @@ D10 own repo of custom builds (mesa/zink, bridge, box64, fex, wine, dxvk)
 real systemd; flatpak/snap/docker/podman (no userns); kernel anticheat; VA-API hw decode; raw sockets/<1024 ports/vpn/kmods; direct usb/bt; 16K-page devices problematic (future)
 
 ## RISKS
-R1 mali vulkan bridge glibc<->bionic (biggest) | R2 mali lacks BCn etc -> transcode | R3 own wayland host | R4 mutter can't nest in wayland -> headless+pipewire or patch | R5 fex under proot | R6 phantom process killer -> onboarding guide | R7 HyperOS blocks adb install (guardprovider missing) -> end users installing APK may also hit MIUI restrictions
+R1 mali vulkan bridge glibc<->bionic (biggest) | R2 mali lacks BCn etc -> transcode | R3 own wayland host | R4 mutter can't nest in wayland -> headless+pipewire or patch | R5 fex under proot | R6 phantom process killer -> onboarding guide | R7 HyperOS blocks 1st adb install (guardprovider missing; manual 1st install worked) -> end users may hit MIUI restrictions | R8 shell-uid probes (dma_heap, /data/local/tmp exec) may differ from app uid -> re-verify in APK | R9 lxc rootfs URLs rotate ~3d -> fetch script resolves latest; pin own mirror for release
 
 ## PHASES
 P0 spikes: S1 mali bridge vkcube+zink glxgears | S2 wayland host+nested phoc+zero-copy | S3 phosh/gnome48 w/ elogind+mini-init (+test systemd --user standalone) | S4 box64+wine arm64ec in proot, Hades
@@ -50,14 +51,18 @@ P5 generalize + github + CI
 ## TASKS (queue) [ ]=todo [~]=doing [x]=done
 [x] T000 orchestration (claude, 2026-11-26)
 [x] T001 toolchain: ndk r30 (30.0.16248370), cmake 4.1.2, orch/env.sh
-[U] T002 app skeleton org.lodos.app: build OK (AGP8.9.3/Gradle8.11.1/Kt2.1.21); adb install blocked by HyperOS (OPEN Q1)
-[ ] T003 S1 research gpu bridge (carbon) | [ ] T004 vkprobe mali (adb shell, no apk)
-[ ] T005 debian13 arm64 rootfs fetch (lxc images) | [ ] T006 proot NDK build + run via adb shell (carbon) | [ ] T007 proot+debian on phone (deps T005,T006)
+[x] T002 app skeleton org.lodos.app (AGP8.9.3/Gradle8.11.1/Kt2.1.21); user did 1st install manually, adb updates OK
+[x] T003 S1 research -> docs/research/S1-gpu-bridge.md (IPC bridge, vk.xml codegen, reuse bionic-vulkan-wrapper host layer)
+[x] T004 vkprobe mali -> docs/research/mali-g720-vk.{json,md}: no BCn/robustness2/clip-cull/multiViewport/fp64
+[x] T005 scripts/fetch-rootfs.sh lxc trixie arm64 (13.7) + docker fallback
+[ ] T006 proot NDK build + adb shell run (carbon) | [ ] T007 proot+debian on phone (deps T005,T006)
+[ ] T008 rust android toolchain + cargo-ndk hello | [ ] T009 AHB/dma_heap/vk AHB import probe | [ ] T010 bionic-vulkan-wrapper NDK build + BC1 smoke (carbon, max4)
 (live status: task files frontmatter)
 
 ## OPEN (need user)
 
 ## LOG (newest first, 1 line each)
+2026-11-26 review2: T002-T005 ok; +T008 rust, T009 ahb probe, T010 vk-layer BC1; D13
 2026-11-26 review1: T001 ok; T002->user (HyperOS adb install); +T005-T007 (rootfs/proot via adb shell)
 2026-11-26 T000 orchestration built, service enabled, T001-T004 queued
 2026-11-26 seeded ai.md; plan agreed
