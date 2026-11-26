@@ -3,7 +3,7 @@
 # Restores on any touch/key, unplug, screen off, or stale work flag.
 B=/data/local/tmp/lodos; mkdir -p $B
 echo $$ > $B/keeper.pid
-IDLE=${IDLE:-300}
+IDLE=${IDLE:-60}
 last=""; since=$(date +%s); dim=0
 restore(){
   [ -f $B/saved ] || return

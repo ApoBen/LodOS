@@ -56,6 +56,11 @@ maybe_shutdown(){ # $1 reason
   log "POWEROFF"; systemctl poweroff; exit 0
 }
 
+AGY_COOLDOWN=${AGY_COOLDOWN:-10800}
+agy_limited(){ [ -f "$S/agy_limited_until" ] && [ "$(date +%s)" -lt "$(cat "$S/agy_limited_until")" ]; }
+claude_limited(){ grep -qiE 'usage limit|limit reached|rate.?limit|out of (extra )?usage|resets? (at|in)' "$1" \
+  && grep -qE '"is_error": *true' "$1"; }
+
 review(){
   bash "$O/review.sh"; local rc=$?
   [ $rc -eq 0 ] && echo 0 > "$S/since_review"
@@ -73,11 +78,26 @@ $(tail -40 "$L/$id.accept.log")"
   prompt="You are a LodOS implementation agent. First read /mnt/SSD/LodOS/GEMINI.md (rules). Your task file: $f (attempt $att/$max). Do the task described in it. Acceptance is checked afterwards by: $acc
 $prev"
   out="$L/$id.a$att.json"
-  log "RUN $id a$att model=$model"
-  timeout 3h "$AGY" -p "$prompt" --model "$model" --output-format json \
-     --dangerously-skip-permissions --add-dir "$R" >"$out" 2>&1
-  st=$(agy_status "$out"); log "AGY $id a$att -> $st"
-  if [ "$st" = QUOTA ]; then setf "$f" attempts "$((att-1))"; maybe_shutdown "agy kotasi bitti"; fi
+  if agy_limited; then
+    log "RUN $id a$att implementer=claude (agy cooldown)"
+    timeout 3h claude -p "IMPLEMENTER MODE (runner): agy quota is out, you implement this task yourself. $prompt" \
+       --output-format json --dangerously-skip-permissions >"$out" 2>&1
+    if claude_limited "$out"; then
+      setf "$f" attempts "$((att-1))"; setf "$f" status todo
+      maybe_shutdown "Claude limiti doldu (agy de bitti)"
+    fi
+    log "CLAUDE $id a$att finished"
+  else
+    log "RUN $id a$att model=$model"
+    timeout 3h "$AGY" -p "$prompt" --model "$model" --output-format json \
+       --dangerously-skip-permissions --add-dir "$R" >"$out" 2>&1
+    st=$(agy_status "$out"); log "AGY $id a$att -> $st"
+    if [ "$st" = QUOTA ]; then
+      setf "$f" attempts "$((att-1))"; setf "$f" status todo
+      echo $(( $(date +%s) + AGY_COOLDOWN )) > "$S/agy_limited_until"
+      log "agy quota -> claude takes over for ${AGY_COOLDOWN}s"; return 0
+    fi
+  fi
   if timeout 1h bash "$acc" >"$L/$id.accept.log" 2>&1; then
     setf "$f" status done; log "DONE $id"; commit "$id: done (a$att)"
   elif [ "$att" -ge "$max" ]; then
@@ -93,7 +113,9 @@ while true; do
   checklist
   if f=$(next_task); then
     run_task "$f"
-    [ "$(cat "$S/since_review" 2>/dev/null || echo 0)" -ge "$REVIEW_EVERY" ] && review
+    if [ "$(cat "$S/since_review" 2>/dev/null || echo 0)" -ge "$REVIEW_EVERY" ]; then
+      review; [ $? -eq 2 ] && agy_limited && maybe_shutdown "Claude limiti doldu (agy de bitti)"
+    fi
     continue
   fi
   # nothing runnable: let Claude plan more work

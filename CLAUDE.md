@@ -1,1 +1,1 @@
-Read ./ai.md first; it is the only source of truth. Claude = coordinator/reviewer; implementation via agy agents. Update ai.md (terse) after every step.
+Read ./ai.md first; it is the only source of truth. Default: Claude = coordinator/reviewer; implementation via agy agents. Exception: prompt starting "IMPLEMENTER MODE (runner)" -> implement the task yourself following GEMINI.md rules. Update ai.md (terse) after every step.
