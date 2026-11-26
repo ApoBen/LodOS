@@ -32,13 +32,14 @@ D8 game mode: per-game fps cap, thermal-headroom auto fps (Android thermal API),
 D9 dist: github releases + f-droid + obtainium; google dev-verification handled at release time
 D11 langs: Kotlin=android app/UI/lifecycle | Rust=new native daemons (wayland host via smithay, audio bridge, mini-init/logind shim, launcher, IPC) via cargo-ndk | C=vulkan ICD/bridge + patches to existing C projects (proot, mesa, box64)
 D12 until apk install works: spike native bits via adb push /data/local/tmp (shell uid) — proot/vkprobe/rootfs
+D14 runner runs accept scripts with LC_ALL=C (tr_TR breaks [A-Za-z]/case ops)
 D10 own repo of custom builds (mesa/zink, bridge, box64, fex, wine, dxvk)
 
 ## HARD LIMITS (unsolvable rootless)
 real systemd; flatpak/snap/docker/podman (no userns); kernel anticheat; VA-API hw decode; raw sockets/<1024 ports/vpn/kmods; direct usb/bt; 16K-page devices problematic (future)
 
 ## RISKS
-R1 mali vulkan bridge glibc<->bionic (biggest) | R2 mali lacks BCn etc -> transcode | R3 own wayland host | R4 mutter can't nest in wayland -> headless+pipewire or patch | R5 fex under proot | R6 phantom process killer -> onboarding guide | R7 HyperOS blocks 1st adb install (guardprovider missing; manual 1st install worked) -> end users may hit MIUI restrictions | R8 shell-uid probes (dma_heap, /data/local/tmp exec) may differ from app uid -> re-verify in APK | R10 proot -r rootfs (link2symlink, sysvipc) only shell-uid tested; apt/dpkg in guest unproven (T011) | R11 Mali DMA_BUF export broken (getMemoryFd fd=-1) -> export only via AHB; app-uid dma_heap untested | R12 vk-layer ICD handles (loader magic) -> bridge must use vk_icdGetInstanceProcAddr; libcutils non-NDK (T014) | R9 lxc rootfs URLs rotate ~3d -> fetch script resolves latest; pin own mirror for release
+R1 mali vulkan bridge glibc<->bionic (biggest) | R2 mali lacks BCn etc -> transcode | R3 own wayland host | R4 mutter can't nest in wayland -> headless+pipewire or patch | R5 fex under proot | R6 phantom process killer -> onboarding guide | R7 HyperOS blocks 1st adb install (guardprovider missing; manual 1st install worked) -> end users may hit MIUI restrictions | R8 shell-uid probes (dma_heap, /data/local/tmp exec) may differ from app uid -> re-verify in APK | R10 proot -r rootfs (link2symlink, sysvipc) only shell-uid tested; apt/dpkg in guest unproven (T011) | R11 Mali DMA_BUF export broken (getMemoryFd fd=-1) -> export only via AHB; app-uid dma_heap untested | R12 vk-layer ICD handles (loader magic) -> bridge must use vk_icdGetInstanceProcAddr; libcutils non-NDK (T014) | R13 shell uid can't bind path AF_UNIX in /data/local/tmp (SELinux) -> abstract sockets; multi-client nested compositor needs path at app uid or proot path->abstract translation (T017) | R9 lxc rootfs URLs rotate ~3d -> fetch script resolves latest; pin own mirror for release
 
 ## PHASES
 P0 spikes: S1 mali bridge vkcube+zink glxgears | S2 wayland host+nested phoc+zero-copy | S3 phosh/gnome48 w/ elogind+mini-init (+test systemd --user standalone) | S4 box64+wine arm64ec in proot, Hades
@@ -61,16 +62,18 @@ P5 generalize + github + CI
 [x] T009 tools/ahbprobe: AHB alloc ok, Vk AHB import zero-copy ok, dma_heap/system ok, DMA_BUF import-only, sync_fd ok -> docs/research/ahb-dmabuf.md
 [x] T010 bionic-vulkan-wrapper NDK r30 build (patch 0001) + BC1 GPU decode ok on Mali; deps libcutils(non-NDK), exports all
 [x] T011 scripts/guest-setup.sh: apt/dpkg/dns ok, /dev/shm bind, sysvipc emulated ok
-[ ] T012 vk-bridge codegen v0 (vk.xml->C marshal, host roundtrip; carbon)
-[ ] T013 S2 rust mini wayland server on phone + guest wayland-info (deps T008,T011; carbon)
+[x] T012 vk-bridge codegen v0: gen.py 10 cmds roundtrip ok (gaps: pNext, handle map, reply/out dir, bounds)
+[x] T013 native/lodos-wl smithay 0.7 on phone, guest wayland-info ok; shell uid path-socket EACCES -> abstract @lodos-*
 [ ] T014 vk-layer: drop libcutils, export only vk_icd* (neon)
 [ ] T015 vk-bridge transport v0: memfd ring + SCM_RIGHTS, host+phone (deps T012; carbon)
 [ ] T016 S3 probe: phosh/phoc in guest, headless phoc under proot (neon)
+[ ] T017 app-uid probe: proot+lodos-wl as jniLibs, path socket + proot -0 at app uid (deps T006,T013; neon)
 (live status: task files frontmatter)
 
 ## OPEN (need user)
 
 ## LOG (newest first, 1 line each)
+2026-11-27 review6: T012 unblocked (locale bug, fixed run.sh:105 LC_ALL=C) -> done; T013 ok; +T017 app-uid probe
 2026-11-26 review5: T010,T011 ok (claude-impl, accept PASS); +T014 vk-layer cleanup, T015 transport, T016 phosh probe
 2026-11-26 review4: T008,T009 ok (claude-impl); +T012 vk codegen, T013 wayland srv
 2026-11-26 review3: T006,T007 ok (claude-implemented, agy quota); +T011 guest apt

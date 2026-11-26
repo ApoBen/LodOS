@@ -102,7 +102,7 @@ $prev"
       log "agy quota -> claude takes over for ${AGY_COOLDOWN}s"; return 0
     fi
   fi
-  if timeout 1h bash "$acc" >"$L/$id.accept.log" 2>&1; then
+  if LC_ALL=C timeout 1h bash "$acc" >"$L/$id.accept.log" 2>&1; then
     setf "$f" status done; log "DONE $id"; commit "$id: done (a$att)"
   elif [ "$att" -ge "$max" ]; then
     setf "$f" status blocked; log "BLOCKED $id"; commit "$id: blocked"
