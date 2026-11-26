@@ -1,0 +1,11 @@
+# lodos-vk-bridge v0 command subset (one per line, # comments)
+vkCreateInstance
+vkEnumeratePhysicalDevices
+vkGetPhysicalDeviceProperties
+vkGetPhysicalDeviceFeatures
+vkGetPhysicalDeviceQueueFamilyProperties
+vkCreateDevice
+vkGetDeviceQueue
+vkAllocateMemory
+vkCreateBuffer
+vkDestroyBuffer
