@@ -1,0 +1,17 @@
+[package]
+name = "lodos-wl"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-3.0-or-later"
+
+[[bin]]
+name = "lodos-wl"
+path = "src/main.rs"
+
+[dependencies]
+smithay = { version = "0.7", default-features = false, features = ["wayland_frontend"] }
+
+[profile.release]
+strip = true
+lto = true
+opt-level = "s"
