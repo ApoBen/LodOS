@@ -38,7 +38,7 @@ D10 own repo of custom builds (mesa/zink, bridge, box64, fex, wine, dxvk)
 real systemd; flatpak/snap/docker/podman (no userns); kernel anticheat; VA-API hw decode; raw sockets/<1024 ports/vpn/kmods; direct usb/bt; 16K-page devices problematic (future)
 
 ## RISKS
-R1 mali vulkan bridge glibc<->bionic (biggest) | R2 mali lacks BCn etc -> transcode | R3 own wayland host | R4 mutter can't nest in wayland -> headless+pipewire or patch | R5 fex under proot | R6 phantom process killer -> onboarding guide | R7 HyperOS blocks 1st adb install (guardprovider missing; manual 1st install worked) -> end users may hit MIUI restrictions | R8 shell-uid probes (dma_heap, /data/local/tmp exec) may differ from app uid -> re-verify in APK | R10 proot -r rootfs (link2symlink, sysvipc) only shell-uid tested; apt/dpkg in guest unproven (T011) | R9 lxc rootfs URLs rotate ~3d -> fetch script resolves latest; pin own mirror for release
+R1 mali vulkan bridge glibc<->bionic (biggest) | R2 mali lacks BCn etc -> transcode | R3 own wayland host | R4 mutter can't nest in wayland -> headless+pipewire or patch | R5 fex under proot | R6 phantom process killer -> onboarding guide | R7 HyperOS blocks 1st adb install (guardprovider missing; manual 1st install worked) -> end users may hit MIUI restrictions | R8 shell-uid probes (dma_heap, /data/local/tmp exec) may differ from app uid -> re-verify in APK | R10 proot -r rootfs (link2symlink, sysvipc) only shell-uid tested; apt/dpkg in guest unproven (T011) | R11 Mali DMA_BUF export broken (getMemoryFd fd=-1) -> export only via AHB; app-uid dma_heap untested | R9 lxc rootfs URLs rotate ~3d -> fetch script resolves latest; pin own mirror for release
 
 ## PHASES
 P0 spikes: S1 mali bridge vkcube+zink glxgears | S2 wayland host+nested phoc+zero-copy | S3 phosh/gnome48 w/ elogind+mini-init (+test systemd --user standalone) | S4 box64+wine arm64ec in proot, Hades
@@ -57,13 +57,18 @@ P5 generalize + github + CI
 [x] T005 scripts/fetch-rootfs.sh lxc trixie arm64 (13.7) + docker fallback
 [x] T006 proot (termux c0b2d098+talloc static, NDK r30) runs -0 on phone
 [x] T007 proot+debian trixie on phone: scripts/phone-rootfs.sh, phone-run.sh (xz->gz recompress)
-[ ] T008 rust android toolchain + cargo-ndk hello | [ ] T009 AHB/dma_heap/vk AHB import probe | [ ] T010 bionic-vulkan-wrapper NDK build + BC1 smoke (carbon, max4)
+[x] T008 rust 1.97.1+cargo-ndk 4.1.2, native/hello-rs, scripts/build-rs.sh
+[x] T009 tools/ahbprobe: AHB alloc ok, Vk AHB import zero-copy ok, dma_heap/system ok, DMA_BUF import-only, sync_fd ok -> docs/research/ahb-dmabuf.md
+[ ] T010 bionic-vulkan-wrapper NDK build + BC1 smoke (carbon, max4)
 [ ] T011 apt/dpkg/net/sysvipc in guest -> scripts/guest-setup.sh (deps T007)
+[ ] T012 vk-bridge codegen v0 (vk.xml->C marshal, host roundtrip; carbon)
+[ ] T013 S2 rust mini wayland server on phone + guest wayland-info (deps T008,T011; carbon)
 (live status: task files frontmatter)
 
 ## OPEN (need user)
 
 ## LOG (newest first, 1 line each)
+2026-11-26 review4: T008,T009 ok (claude-impl); +T012 vk codegen, T013 wayland srv
 2026-11-26 review3: T006,T007 ok (claude-implemented, agy quota); +T011 guest apt
 2026-11-26 review2: T002-T005 ok; +T008 rust, T009 ahb probe, T010 vk-layer BC1; D13
 2026-11-26 review1: T001 ok; T002->user (HyperOS adb install); +T005-T007 (rootfs/proot via adb shell)
