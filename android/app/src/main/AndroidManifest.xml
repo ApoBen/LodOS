@@ -29,6 +29,11 @@
             android:exported="true"
             android:excludeFromRecents="true"
             android:noHistory="true" />
+        <activity
+            android:name=".DisplayActivity"
+            android:configChanges="orientation|screenSize|keyboardHidden|screenLayout|smallestScreenSize"
+            android:exported="true"
+            android:theme="@android:style/Theme.Black.NoTitleBar.Fullscreen" />
     </application>
 
 </manifest>

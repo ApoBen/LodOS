@@ -4,11 +4,17 @@ version = "0.1.0"
 edition = "2021"
 license = "GPL-3.0-or-later"
 
+[lib]
+name = "lodos_wl"
+path = "src/lib.rs"
+crate-type = ["cdylib", "rlib"]
+
 [[bin]]
 name = "lodos-wl"
 path = "src/main.rs"
 
 [dependencies]
+jni-sys = "0.4"
 smithay = { version = "0.7", default-features = false, features = ["wayland_frontend"] }
 
 [profile.release]

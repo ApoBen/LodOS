@@ -53,7 +53,13 @@ android {
     packaging {
         jniLibs {
             useLegacyPackaging = true
-            keepDebugSymbols += listOf("**/libproot.so", "**/libproot_loader.so", "**/liblodos_wl.so")
+            keepDebugSymbols += listOf(
+                "**/libproot.so",
+                "**/libproot_loader.so",
+                "**/liblodos_wl.so",
+                "**/liblodos_wl_bin.so",
+                "**/libshmfill.so"
+            )
         }
     }
 
