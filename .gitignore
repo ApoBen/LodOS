@@ -1,0 +1,12 @@
+orch/logs/
+orch/state/
+third_party/src/
+rootfs/
+build/
+.gradle/
+**/build/
+local.properties
+*.apk
+*.aab
+.cxx/
+.idea/
