@@ -56,7 +56,6 @@ P5 generalize + github + CI
 (live status: task files frontmatter)
 
 ## OPEN (need user)
-Q1 T002: HyperOS adb install fails (content://guard missing). Run `adb -s <phone-serial> shell cmd package install-existing com.miui.guardprovider` OR enable Dev options 'USB üzerinden yükle'/disable MIUI optimization; then set T002 status todo, attempts 0.
 
 ## LOG (newest first, 1 line each)
 2026-11-26 review1: T001 ok; T002->user (HyperOS adb install); +T005-T007 (rootfs/proot via adb shell)
