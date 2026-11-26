@@ -1,0 +1,7 @@
+/* LodOS vk layer: export only the ICD loader interface. */
+{
+  global:
+    vk_icd*;
+  local:
+    *;
+};

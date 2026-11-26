@@ -32,6 +32,8 @@ for p in "$ROOT"/patches/bionic-vulkan-wrapper/*.patch; do
   if git -C "$SRC" apply --reverse --check "$p" 2>/dev/null; then continue; fi
   git -C "$SRC" apply "$p"
 done
+# export map (patch 0002 links with it): only vk_icd* global
+cp -u "$ROOT/scripts/cross/vk-layer.map" "$SRC/src/vulkan/wrapper/lodos-vk-layer.map"
 
 # 1) SPIRV-Tools (leegao fork w/ Mali passes), static, arm64
 if [ ! -f "$B/spirv-tools/source/opt/libSPIRV-Tools-opt.a" ]; then
@@ -62,4 +64,5 @@ ninja -C "$B/meson" -j"$JOBS" src/vulkan/wrapper/libvulkan_wrapper.so
 mkdir -p "$B/arm64"
 llvm-strip --strip-unneeded -o "$B/arm64/libvulkan_lodos_mali.so" "$B/meson/src/vulkan/wrapper/libvulkan_wrapper.so"
 echo "deps:"; llvm-readelf -d "$B/arm64/libvulkan_lodos_mali.so" | grep NEEDED
+echo "exports: $(llvm-readelf --dyn-syms -W "$B/arm64/libvulkan_lodos_mali.so" | awk '$5=="GLOBAL" && $7!="UND"' | wc -l)"
 ls -la "$B/arm64/libvulkan_lodos_mali.so"

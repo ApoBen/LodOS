@@ -1,0 +1,80 @@
+diff --git a/src/android_stub/cutils_local.c b/src/android_stub/cutils_local.c
+new file mode 100644
+index 0000000..a5013b4
+--- /dev/null
++++ b/src/android_stub/cutils_local.c
+@@ -0,0 +1,34 @@
++/* LodOS: local static replacement for the few libcutils symbols mesa uses,
++ * so the wrapper .so has no libcutils.so (non-NDK) DT_NEEDED. */
++#include <stdint.h>
++#include <string.h>
++#include <sys/system_properties.h>
++
++int property_get(const char *key, char *value, const char *default_value);
++uint64_t atrace_get_enabled_tags(void);
++void atrace_init(void);
++void atrace_begin_body(const char *name);
++void atrace_end_body(void);
++
++int property_get(const char *key, char *value, const char *default_value)
++{
++   int len = __system_property_get(key, value);
++   if (len > 0)
++      return len;
++   if (default_value) {
++      len = (int)strlen(default_value);
++      if (len >= PROP_VALUE_MAX)
++         len = PROP_VALUE_MAX - 1;
++      memcpy(value, default_value, len);
++      value[len] = '\0';
++      return len;
++   }
++   value[0] = '\0';
++   return 0;
++}
++
++/* tracing disabled: no tags enabled -> begin/end never called by inline helpers */
++uint64_t atrace_get_enabled_tags(void) { return 0; }
++void atrace_init(void) {}
++void atrace_begin_body(const char *name) { (void)name; }
++void atrace_end_body(void) {}
+diff --git a/src/android_stub/meson.build b/src/android_stub/meson.build
+index 6097ae8..91d09d0 100644
+--- a/src/android_stub/meson.build
++++ b/src/android_stub/meson.build
+@@ -1,6 +1,6 @@
+ if with_android_stub
+   stub_libs = []
+-  lib_names = ['cutils', 'hardware', 'log', 'nativewindow', 'sync']
++  lib_names = ['hardware', 'log', 'nativewindow', 'sync']
+ 
+   if with_libbacktrace
+     lib_names += ['backtrace']
+@@ -15,6 +15,14 @@ if with_android_stub
+     )
+   endforeach
+ 
++  # LodOS: cutils implemented locally (static), not linked against libcutils.so
++  stub_libs += static_library(
++    'cutils_local',
++    files('cutils_local.c'),
++    pic : true,
++    install : false,
++  )
++
+   dep_android = declare_dependency(
+     link_with : stub_libs,
+   )
+diff --git a/src/vulkan/wrapper/meson.build b/src/vulkan/wrapper/meson.build
+index 1b11b3c..6dce8fc 100644
+--- a/src/vulkan/wrapper/meson.build
++++ b/src/vulkan/wrapper/meson.build
+@@ -217,5 +217,8 @@ libvulkan_wrapper = shared_library(
+   ],
+   dependencies: [wrapper_deps, vulkan_wsi_deps, spirv_tools_deps],
+   gnu_symbol_visibility: 'hidden',
++  # LodOS: export only vk_icd* (exclude-libs ALL would also hide vk_icd* from libvulkan_runtime.a; map copied from scripts/cross/vk-layer.map by build-vk-layer.sh)
++  link_args: ['-Wl,--version-script=' + (meson.current_source_dir() / 'lodos-vk-layer.map'), '-Wl,--exclude-libs,libSPIRV-Tools.a:libSPIRV-Tools-opt.a:libc++_static.a:libc++abi.a:libcutils_local.a'],
++  link_depends: files('lodos-vk-layer.map'),
+   install: true,
+ )
