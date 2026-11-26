@@ -55,3 +55,26 @@ dbus-daemon warning: `Failed to set fd limit to 65536: Operation not permitted` 
 - R13 is the only hard blocker for headless phoc. The LD_PRELOAD shim is enough for in-guest compositor+clients. Candidate for global use (/etc/ld.so.preload with prefix /tmp/xdg:/run/user) if app uid also denies path sockets (T017 decides).
 - elogind conflicts with the rootfs systemd. D3 needs a systemd-sysv -> elogind swap task. A system bus (dbus system daemon) is needed for phosh managers.
 - Next: phoc with a real output (wayland backend nested into lodos-wl via abstract socket, or headless + screencopy) and a system dbus.
+
+### elogind (T021: systemd-free swap + system dbus + login1)
+- **Script**: `scripts/guest-init.sh` (idempotent host driver; log `/tmp/lodos-guest-init.log`).
+- **Package swap (Debian 13 trixie arm64)**:
+  - Install: `sysvinit-core elogind libpam-elogind dbus-x11 libglib2.0-bin` (pulls `initscripts insserv startpar sysv-rc systemd-standalone-sysusers`).
+  - Remove (via `apt-get install --allow-remove-essential` with `<pkg>-`): `systemd systemd-sysv dbus-user-session libpam-systemd` (also removes `libnss-systemd systemd-resolved`).
+  - Disk impact: **-10.3 MB** freed (1.66 MB download, 10 added, 6 removed). `libsystemd0` remains installed (Debian trixie `elogind` uses `libsystemd0` directly, no `libelogind0` needed). No failed postinst; `phosh`/`phoc`/`udev`/`polkitd`/`libseat1` all stay intact.
+- **System D-Bus (`dbus-daemon --system`)**:
+  - Diverted `/usr/share/dbus-1/system.conf` (`dpkg-divert --local`):
+    1. `<listen>unix:path=/run/dbus/system_bus_socket</listen>` -> `unix:abstract=/run/dbus/system_bus_socket` (R13 shell-uid workaround; `DBUS_SYSTEM_BUS_ADDRESS` exported to match, and `LODOS_U2A_PREFIX=/tmp/xdg:/run/dbus` maps hardcoded path clients to the same abstract address).
+    2. Removed `<user>messagebus</user>`: under `proot -0`, `dbus-daemon` otherwise aborts with `Failed to drop capabilities: Operation not permitted` (`capset` denied for unprivileged host uid).
+  - `SO_PEERCRED` under `proot -0` reports `uid=0` (`root`), so `/usr/share/dbus-1/system.d/org.freedesktop.login1.conf` `<policy user="root">` matches cleanly and `RequestName(org.freedesktop.login1)` succeeds.
+- **elogind daemon (`/usr/libexec/elogind`)**:
+  - Stock `/usr/libexec/elogind` fails at startup with `sd-device-monitor: Failed to create socket: Permission denied` (`Failed to create udev watchers: Permission denied`) because Android SELinux denies `socket(AF_NETLINK, SOCK_RAW, NETLINK_KOBJECT_UEVENT)` (even when udev is inactive).
+  - Workaround: `native/elogind-shim/elogind_shim.c` (`build/elogind-shim/libelogind_shim.so`, header-free NDK clang build, pushed to `/usr/local/lib/lodos/`). On `socket(AF_NETLINK, ..., NETLINK_KOBJECT_UEVENT)` failure, substitutes an idle `AF_UNIX` `SOCK_DGRAM` fd (pollable via `epoll`) and stubs `bind`/`setsockopt`/`getsockname` on that fd. Chains cleanly with `libunix2abstract.so` in `LD_PRELOAD`.
+  - With the shim, `/usr/libexec/elogind` stays alive, acquires `org.freedesktop.login1`, responds `()` to `gdbus call --system -d org.freedesktop.login1 -o /org/freedesktop/login1 -m org.freedesktop.DBus.Peer.Ping`, and shows up in `busctl --system list` (`busctl` is shipped by `elogind`).
+- **What works / doesn't**:
+  - **Works**: system bus, `org.freedesktop.login1` ownership & `Peer.Ping`, `busctl --system list`, `loginctl list-sessions` (`No sessions.`), `loginctl list-seats` (`seat0` created automatically: `CanTTY=no`, `CanGraphical=no`, `IdleHint=yes`), `phosh` login1 proxy lookup (**`phosh-login1-warn=0`**, down from 1 `phosh-torch-manager-WARNING: Failed to get login1 session proxy` in T016; phosh reaches `Phosh ready` and stays `phosh-alive` 10s).
+  - **Cgroups**: Android exposes cgroup2 at `/sys/fs/cgroup` (owned by `1000:1000`), so elogind reports all controllers unsupported (`cpu/memory/pids/... supported: no`) and ignores `memory pressure` (`EACCES`) + missing `/var/run/utmp` at startup.
+  - **PAM (`libpam-elogind`)**: wired into `/etc/pam.d/common-session` (`session optional pam_elogind.so`) and reaches `elogind` on `su - root`, but session creation fails because elogind cannot create cgroup `user.slice/user-0.slice/session-c1.scope: Permission denied` (and fails unmounting/removing `/run/user/0` with `Operation not permitted`). As a result, `loginctl list-sessions` stays empty and `polkit` still logs `No session for pid`.
+  - **Inhibitors**: `login1.Manager.Inhibit` (`phosh-screen-saver-manager` power-button/suspend inhibit) returns `GDBus.Error:org.freedesktop.DBus.Error.FileNotFound` (no session / `/run/systemd/inhibit` / polkit helper). UPower activation also fails (`dbus-daemon-launch-helper` setuid check under proot).
+  - **Takeaway for D3**: real `elogind` + system bus is viable for `org.freedesktop.login1` presence, but PAM session registration is blocked by unprivileged cgroup creation; if polkit/session-scoped features later need an active session entry without cgroups, our D3 mini-init/logind shim (Rust, D11) or a cgroup-skipping patch to elogind will be needed.
+
