@@ -30,13 +30,14 @@ D7 compat: box64 primary, FEX experimental; wine ARM64EC + fex/box64 wow64
 D8 game mode: per-game fps cap, thermal-headroom auto fps (Android thermal API), PerformanceHint, FSR scale, mangohud, touch controls, profiles (Hades first)
 D9 dist: github releases + f-droid + obtainium; google dev-verification handled at release time
 D11 langs: Kotlin=android app/UI/lifecycle | Rust=new native daemons (wayland host via smithay, audio bridge, mini-init/logind shim, launcher, IPC) via cargo-ndk | C=vulkan ICD/bridge + patches to existing C projects (proot, mesa, box64)
+D12 until apk install works: spike native bits via adb push /data/local/tmp (shell uid) — proot/vkprobe/rootfs
 D10 own repo of custom builds (mesa/zink, bridge, box64, fex, wine, dxvk)
 
 ## HARD LIMITS (unsolvable rootless)
 real systemd; flatpak/snap/docker/podman (no userns); kernel anticheat; VA-API hw decode; raw sockets/<1024 ports/vpn/kmods; direct usb/bt; 16K-page devices problematic (future)
 
 ## RISKS
-R1 mali vulkan bridge glibc<->bionic (biggest) | R2 mali lacks BCn etc -> transcode | R3 own wayland host | R4 mutter can't nest in wayland -> headless+pipewire or patch | R5 fex under proot | R6 phantom process killer -> onboarding guide
+R1 mali vulkan bridge glibc<->bionic (biggest) | R2 mali lacks BCn etc -> transcode | R3 own wayland host | R4 mutter can't nest in wayland -> headless+pipewire or patch | R5 fex under proot | R6 phantom process killer -> onboarding guide | R7 HyperOS blocks adb install (guardprovider missing) -> end users installing APK may also hit MIUI restrictions
 
 ## PHASES
 P0 spikes: S1 mali bridge vkcube+zink glxgears | S2 wayland host+nested phoc+zero-copy | S3 phosh/gnome48 w/ elogind+mini-init (+test systemd --user standalone) | S4 box64+wine arm64ec in proot, Hades
@@ -48,11 +49,16 @@ P5 generalize + github + CI
 
 ## TASKS (queue) [ ]=todo [~]=doing [x]=done
 [x] T000 orchestration (claude, 2026-11-26)
-[ ] T001 toolchain ndk27+/cmake/env.sh | [ ] T002 app skeleton org.lodos.app on phone | [ ] T003 S1 research gpu bridge (carbon) | [ ] T004 vkprobe mali features
+[x] T001 toolchain: ndk r30 (30.0.16248370), cmake 4.1.2, orch/env.sh
+[U] T002 app skeleton org.lodos.app: build OK (AGP8.9.3/Gradle8.11.1/Kt2.1.21); adb install blocked by HyperOS (OPEN Q1)
+[ ] T003 S1 research gpu bridge (carbon) | [ ] T004 vkprobe mali (adb shell, no apk)
+[ ] T005 debian13 arm64 rootfs fetch (lxc images) | [ ] T006 proot NDK build + run via adb shell (carbon) | [ ] T007 proot+debian on phone (deps T005,T006)
 (live status: task files frontmatter)
 
 ## OPEN (need user)
+Q1 T002: HyperOS adb install fails (content://guard missing). Run `adb -s <phone-serial> shell cmd package install-existing com.miui.guardprovider` OR enable Dev options 'USB üzerinden yükle'/disable MIUI optimization; then set T002 status todo, attempts 0.
 
 ## LOG (newest first, 1 line each)
+2026-11-26 review1: T001 ok; T002->user (HyperOS adb install); +T005-T007 (rootfs/proot via adb shell)
 2026-11-26 T000 orchestration built, service enabled, T001-T004 queued
 2026-11-26 seeded ai.md; plan agreed
