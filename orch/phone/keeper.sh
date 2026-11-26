@@ -1,5 +1,5 @@
 #!/system/bin/sh
-# Runs ON the phone (shell uid). Dims to brightness 0 when: plugged + awake + no user input for 5 min + PC says work is active.
+# Runs ON the phone (shell uid). Dims to brightness 0 when: plugged + awake + no user input for IDLE s; shows black BlackActivity (AMOLED off) + PC says work is active.
 # Restores on any touch/key, unplug, screen off, or stale work flag.
 B=/data/local/tmp/lodos; mkdir -p $B
 echo $$ > $B/keeper.pid
@@ -10,6 +10,7 @@ restore(){
   read br mode < $B/saved
   settings put system screen_brightness_mode "$mode"
   settings put system screen_brightness "$br"
+  dumpsys activity activities | grep -q 'mResumedActivity.*BlackActivity\|topResumedActivity.*BlackActivity' && am force-stop org.lodos.app
   rm -f $B/saved; dim=0; echo "$(date) restore" >> $B/keeper.log
 }
 trap 'restore; exit 0' INT TERM
@@ -27,6 +28,7 @@ while true; do
     echo "$(settings get system screen_brightness) $(settings get system screen_brightness_mode)" > $B/saved
     settings put system screen_brightness_mode 0
     settings put system screen_brightness 0
+    am start -n org.lodos.app/.BlackActivity >/dev/null 2>&1
     dim=1; echo "$(date) dim" >> $B/keeper.log
     # brightness change itself may bump activity; resync
     sleep 2; last=$(dumpsys power | sed -n 's/.*mLastUserActivityTime[^=]*=\([0-9]*\).*/\1/p' | head -1)
