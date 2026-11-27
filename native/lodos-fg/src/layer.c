@@ -92,13 +92,25 @@ static VkResult VKAPI_CALL layer_create_instance(const VkInstanceCreateInfo *ci,
     d->destroy_instance = (PFN_vkDestroyInstance)gipa(*out, "vkDestroyInstance");
     d->get_caps = (PFN_vkGetPhysicalDeviceSurfaceCapabilitiesKHR)gipa(*out, "vkGetPhysicalDeviceSurfaceCapabilitiesKHR");
     d->get_caps2 = (PFN_vkGetPhysicalDeviceSurfaceCapabilities2KHR)gipa(*out, "vkGetPhysicalDeviceSurfaceCapabilities2KHR");
+    if (!d->gdpa || !d->destroy_instance) {
+        PFN_vkDestroyInstance destroy = (PFN_vkDestroyInstance)gipa(*out, "vkDestroyInstance");
+        if (destroy) destroy(*out, a);
+        free(d);
+        return VK_ERROR_INITIALIZATION_FAILED;
+    }
     d->next = instances; instances = d;
     return r;
 }
 static void VKAPI_CALL layer_destroy_instance(VkInstance i, const VkAllocationCallbacks *a) {
     InstanceDispatch **it = &instances;
     while (*it && (*it)->key != dispatch_key(i)) it = &(*it)->next;
-    if (*it) { InstanceDispatch *d = *it; *it = d->next; d->destroy_instance(i, a); free(d); }
+    if (*it) {
+        InstanceDispatch *d = *it;
+        *it = d->next;
+        PFN_vkDestroyInstance destroy = d->destroy_instance;
+        free(d);
+        if (destroy) destroy(i, a);
+    }
 }
 static VkResult VKAPI_CALL layer_create_device(VkPhysicalDevice p, const VkDeviceCreateInfo *ci, const VkAllocationCallbacks *a, VkDevice *out) {
     InstanceDispatch *id = find_instance(p);
@@ -119,13 +131,25 @@ static VkResult VKAPI_CALL layer_create_device(VkPhysicalDevice p, const VkDevic
     d->key = dispatch_key(*out); d->device = *out; d->gdpa = gdpa;
     d->destroy_device = (PFN_vkDestroyDevice)gdpa(*out, "vkDestroyDevice");
     d->create_swapchain = (PFN_vkCreateSwapchainKHR)gdpa(*out, "vkCreateSwapchainKHR");
+    if (!d->destroy_device) {
+        PFN_vkDestroyDevice destroy = (PFN_vkDestroyDevice)gdpa(*out, "vkDestroyDevice");
+        if (destroy) destroy(*out, a);
+        free(d);
+        return VK_ERROR_INITIALIZATION_FAILED;
+    }
     d->next = devices; devices = d;
     return r;
 }
 static void VKAPI_CALL layer_destroy_device(VkDevice dev, const VkAllocationCallbacks *a) {
     DeviceDispatch **it = &devices;
     while (*it && (*it)->key != dispatch_key(dev)) it = &(*it)->next;
-    if (*it) { DeviceDispatch *d = *it; *it = d->next; d->destroy_device(dev, a); free(d); }
+    if (*it) {
+        DeviceDispatch *d = *it;
+        *it = d->next;
+        PFN_vkDestroyDevice destroy = d->destroy_device;
+        free(d);
+        if (destroy) destroy(dev, a);
+    }
 }
 static VkResult VKAPI_CALL layer_create_swapchain(VkDevice dev, const VkSwapchainCreateInfoKHR *ci, const VkAllocationCallbacks *a, VkSwapchainKHR *out) {
     DeviceDispatch *d = find_device(dev);
