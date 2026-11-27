@@ -1,0 +1,11 @@
+# Guest session (T048)
+- `session/GuestSessionService` (FGS, `specialUse`, notification w/ Stop) owns the guest; binds `SessionController`.
+- Start: `GuestLaunch` argv (proot -0 ... `env -i` ... `/sbin/lodos-init`, `GuestSpec.lodosInit=true`) + lite env from `LiteMode.resolve(AndroidDeviceSpec, LiteModeStore)`.
+- States: Stopped -> Starting -> Running -> Stopping -> Stopped; Crashed(code, restartInMs); Failed(reason).
+- Stop: SIGTERM (Process.destroy) to proot, wait 5s, SIGKILL (destroyForcibly); `--kill-on-exit` reaps guest tree. Pending restarts cancelled.
+- Crash (unrequested exit != 0): restart after 1s/2s/4s, max 3 -> Failed. Run >= 60s resets budget. Exit 0 unrequested = guest poweroff -> Stopped.
+- Logs: stdout+stderr -> filesDir/logs/guest-<UTC yyyyMMdd-HHmmss-SSS>.log, one per launch, keep newest 5 (`LogRotator`).
+- Bugreport: only newest guest-*.log, last 2000 lines, redacted (`BugReport.selectLogs/tailLines`).
+- Controller is pure Kotlin (ProcessRunner + Clock injected) -> 16 JVM tests, no phone.
+- Open: SIGTERM hits proot, not lodos-init directly; whether proot forwards it to the tracee (graceful systemd-style shutdown) is untested on phone.
+- Open: POST_NOTIFICATIONS runtime request not wired (API33+ notification hidden until granted; FGS still runs). No UI caller yet.

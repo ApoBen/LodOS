@@ -17,13 +17,15 @@ data class GuestPaths(
 
 data class GuestSpec(
     val paths: GuestPaths,
-    val cmd: List<String>,
+    val cmd: List<String> = emptyList(),
     val lite: LiteProfile? = null,
     val extraEnv: Map<String, String> = emptyMap(),
     /** host -> guest */
     val extraBinds: List<Pair<String, String>> = emptyList(),
     val waylandDisplay: String = "wayland-0",
     val workDir: String = "/root",
+    /** T048: true -> guest command is /sbin/lodos-init (PID1 of the guest tree); [cmd] ignored. */
+    val lodosInit: Boolean = false,
 )
 
 /** Pure builder for the app-uid proot guest command (T046). No process spawn here. */
@@ -31,6 +33,7 @@ object GuestLaunch {
     const val PROOT = "libproot.so"
     const val LOADER = "libproot_loader.so"
     const val GUEST_RUN = "/run/lodos"
+    const val LODOS_INIT = "/sbin/lodos-init"
     const val GUEST_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 
     fun validate(spec: GuestSpec) {
@@ -39,8 +42,10 @@ object GuestLaunch {
             spec.extraBinds.flatMap { listOf(it.first, it.second) }
         all.forEach { require(it.startsWith("/")) { "relative path: '$it'" } }
         require(File(p.rootfsDir).isDirectory) { "rootfs missing: ${p.rootfsDir}" }
-        require(spec.cmd.isNotEmpty()) { "empty cmd" }
+        require(effectiveCmd(spec).isNotEmpty()) { "empty cmd" }
     }
+
+    fun effectiveCmd(spec: GuestSpec): List<String> = if (spec.lodosInit) listOf(LODOS_INIT) else spec.cmd
 
     fun prootPath(p: GuestPaths) = "${p.nativeLibDir}/$PROOT"
     fun loaderPath(p: GuestPaths) = "${p.nativeLibDir}/$LOADER"
@@ -88,7 +93,7 @@ object GuestLaunch {
         spec.extraBinds.forEach { (h, g) -> a += listOf("-b", "$h:$g") }
         a += listOf("-w", spec.workDir, "/usr/bin/env", "-i")
         guestEnv(spec).forEach { (k, v) -> a += "$k=$v" }
-        a += spec.cmd
+        a += effectiveCmd(spec)
         return a
     }
 }

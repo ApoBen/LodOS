@@ -24,6 +24,9 @@ object BugReport {
     const val ISSUE_BODY_MAX_BYTES = 6000
     const val REPORT_NAME = "report.md"
     const val ZIP_PREFIX = "bugreport-"
+    /** T048 guest session logs: only the newest guest-*.log, last N lines. */
+    const val GUEST_LOG_PREFIX = "guest-"
+    const val GUEST_LOG_TAIL_LINES = 2000
     private const val TRUNC_NOTE = "\n\n…(truncated; full report + logs in the attached bugreport zip)\n"
 
     data class Input(
@@ -92,6 +95,24 @@ object BugReport {
         return String(bytes, 0, end, StandardCharsets.UTF_8)
     }
 
+    /** Last [n] lines of [text]. */
+    fun tailLines(text: String, n: Int): String {
+        val lines = text.split('\n')
+        val trailingNl = text.endsWith("\n")
+        val body = if (trailingNl) lines.dropLast(1) else lines
+        if (body.size <= n) return text
+        return body.takeLast(n).joinToString("\n") + if (trailingNl) "\n" else ""
+    }
+
+    fun isGuestLog(f: File) = f.name.startsWith(GUEST_LOG_PREFIX) && f.name.endsWith(".log")
+
+    /** All non-guest *.log files + only the newest guest-*.log (names sort by timestamp). */
+    fun selectLogs(files: List<File>): List<File> {
+        val logs = files.filter { it.isFile && it.name.endsWith(".log") }
+        val newestGuest = logs.filter { isGuestLog(it) }.maxByOrNull { it.name }
+        return logs.filter { !isGuestLog(it) } + listOfNotNull(newestGuest)
+    }
+
     // ---- report ----
     fun timestamp(ms: Long): String =
         SimpleDateFormat("yyyyMMdd-HHmmss", Locale.US).apply { timeZone = TimeZone.getTimeZone("UTC") }
@@ -121,9 +142,10 @@ object BugReport {
         val logs = LinkedHashMap<String, ByteArray>()
         val logcatBytes = tail(input.logcat.toByteArray(StandardCharsets.UTF_8), LOGCAT_CAP_BYTES)
         logs["logcat.txt"] = redact(String(logcatBytes, StandardCharsets.UTF_8)).toByteArray(StandardCharsets.UTF_8)
-        for (f in input.logFiles.filter { it.isFile && it.name.endsWith(".log") }.sortedBy { it.name }) {
-            val raw = tailFile(f, LOG_FILE_CAP_BYTES)
-            val red = redact(String(raw, StandardCharsets.UTF_8)).toByteArray(StandardCharsets.UTF_8)
+        for (f in selectLogs(input.logFiles).sortedBy { it.name }) {
+            var text = String(tailFile(f, LOG_FILE_CAP_BYTES), StandardCharsets.UTF_8)
+            if (isGuestLog(f)) text = tailLines(text, GUEST_LOG_TAIL_LINES)
+            val red = redact(text).toByteArray(StandardCharsets.UTF_8)
             // redaction placeholders can grow content slightly; re-apply the cap
             logs[f.name] = tail(red, LOG_FILE_CAP_BYTES)
         }

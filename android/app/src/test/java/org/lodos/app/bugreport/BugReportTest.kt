@@ -127,4 +127,18 @@ class BugReportTest {
         val decoded = URLDecoder.decode(url.substringAfter("&body="), "UTF-8")
         assertEquals(body, decoded)
     }
+
+    @Test
+    fun onlyNewestGuestLogTailedAndRedacted() {
+        val logs = tmp.newFolder("glogs")
+        File(logs, "guest-20261127-100000-000.log").writeText("old\n")
+        File(logs, "guest-20261127-110000-000.log").writeText((1..2500).joinToString("") { "line $it token=abc\n" })
+        File(logs, "session.log").writeText("s\n")
+        val e = entries(BugReport.writeZip(input(files = logs.listFiles()!!.toList()), tmp.newFolder("gout")))
+        assertEquals(setOf("report.md", "logs/logcat.txt", "logs/session.log", "logs/guest-20261127-110000-000.log"), e.keys)
+        val g = String(e.getValue("logs/guest-20261127-110000-000.log"), StandardCharsets.UTF_8)
+        assertEquals(BugReport.GUEST_LOG_TAIL_LINES, g.trimEnd().lines().size)
+        assertTrue(g.startsWith("line 501 "))
+        assertFalse(g.contains("abc"))
+    }
 }

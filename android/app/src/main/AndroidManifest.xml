@@ -2,6 +2,9 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
     <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <application
         android:allowBackup="false"
@@ -43,6 +46,15 @@
             android:authorities="${applicationId}.bugreport"
             android:exported="false"
             android:grantUriPermissions="true" />
+        <!-- T048: guest session (proot -> /sbin/lodos-init PID1) -->
+        <service
+            android:name=".session.GuestSessionService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Runs a user-started Linux desktop guest (proot) that must survive while the user switches apps." />
+        </service>
     </application>
 
 </manifest>
