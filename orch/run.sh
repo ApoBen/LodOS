@@ -124,18 +124,16 @@ $prev"
     fi
     log "GROK $id a$att finished rc=$grc"
   elif agy_limited; then
-    log "RUN $id a$att implementer=claude (agy+codex+grok out)"
-    timeout 3h claude -p "IMPLEMENTER MODE (runner): agy quota is out, you implement this task yourself. $prompt" \
-       --output-format json --dangerously-skip-permissions >"$out" 2>&1
-    if claude_limited "$out"; then
-      setf "$f" attempts "$((att-1))"; setf "$f" status todo
-      local left=99999; [ -f "$O/AGY_OFF" ] || left=$(( $(cat "$S/agy_limited_until" 2>/dev/null || echo 0) - $(date +%s) ))
-      [ -f "$S/codex_limited_until" ] && [ ! -f "$O/CODEX_OFF" ] && { local cl=$(( $(cat "$S/codex_limited_until") - $(date +%s) )); [ $cl -lt $left ] && left=$cl; }
-      [ -f "$S/grok_limited_until" ] && [ ! -f "$O/GROK_OFF" ] && { local gl=$(( $(cat "$S/grok_limited_until") - $(date +%s) )); [ $gl -lt $left ] && left=$gl; }
-      if [ "$left" -le 5400 ]; then log "claude limit; waiting ${left}s for agy"; sleep "$left"; return 0; fi
-      maybe_shutdown "Claude limiti doldu (agy+codex+grok de bitti)"
-    fi
-    log "CLAUDE $id a$att finished"
+    # all free implementers out. Claude is coordinator/reviewer only (user directive 2026-11-27): wait or power off
+    setf "$f" attempts "$((att-1))"; setf "$f" status todo
+    local left=999999 now; now=$(date +%s)
+    [ -f "$O/AGY_OFF" ] || { [ -f "$S/agy_limited_until" ] && left=$(( $(cat "$S/agy_limited_until") - now )); }
+    [ -f "$O/CODEX_OFF" ] || { [ -f "$S/codex_limited_until" ] && { local c=$(( $(cat "$S/codex_limited_until") - now )); [ $c -lt $left ] && left=$c; }; }
+    [ -f "$O/GROK_OFF" ] || { [ -f "$S/grok_limited_until" ] && { local g=$(( $(cat "$S/grok_limited_until") - now )); [ $g -lt $left ] && left=$g; }; }
+    [ $left -lt 60 ] && left=60
+    if [ "$left" -le 5400 ]; then log "all free implementers out; waiting ${left}s"; sleep "$left"; return 0; fi
+    maybe_shutdown "tum ucretsiz kotalar bitti (agy+codex+grok)"
+    return 0
   else
     log "RUN $id a$att model=$model"
     timeout 3h "$AGY" -p "$prompt" --model "$model" --output-format json \
@@ -174,7 +172,7 @@ while true; do
   while [ "${#PIDS[@]}" -lt "$LANES" ] && f=$(next_task); do lane "$f"; started=1; sleep 5; done
   if [ "$(cat "$S/since_review" 2>/dev/null || echo 0)" -ge "$REVIEW_EVERY" ] && [ "$(date +%s)" -ge "${NEXT_REVIEW_TRY:-0}" ]; then
     NEXT_REVIEW_TRY=$(( $(date +%s) + 900 ))   # failed/limited review retried at most every 15 min
-    review; [ $? -eq 2 ] && agy_limited && codex_limited && grok_limited && [ "${#PIDS[@]}" -eq 0 ] && maybe_shutdown "Claude limiti doldu (agy+codex+grok de bitti)"
+    review
     continue
   fi
   if [ "${#PIDS[@]}" -gt 0 ] || [ $started = 1 ]; then sleep 30; continue; fi
