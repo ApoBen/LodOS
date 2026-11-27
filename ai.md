@@ -118,7 +118,7 @@ P5 generalize + github + CI
 [x] T060 P1 HttpRootfsRepo (resume/sha256/JNI extract) in SetupActivity, JVM tests; manifest URL/sha = placeholders until rootfs published (codex)
 [x] T061 audio relay staged in APK (liblodos_audio_relay.so), audio-start.sh prefers relay, socat fallback (codex)
 [x] T062 docs/research/S4-wine.md: ARM64EC+FEX long-term, box64+x86_64 wine fallback; DXVK needs > Mali ICD features (codex)
-[ ] T063 ICD GDPA misses 354->=<250 (VK1.4/EDS cmds), Arc zink+syncfd regress (carbon, pure PC)
+[ ] T063 ICD GDPA misses 354-><=250 (VK1.4/EDS cmds), Arc zink+syncfd regress (carbon, pure PC)
 [ ] T064 P1 /sdcard: StorageAccess + MANAGE_EXTERNAL_STORAGE flow -> GuestLaunch sdcard (neon, gradle)
 [ ] T065 PC Xwayland xterm in nested phoc/phosh, PNG (neon, pcdisplay)
 (live status: task files frontmatter)
