@@ -110,12 +110,15 @@ P5 generalize + github + CI
 [ ] T052 P1 session UI Start/Stop + POST_NOTIFICATIONS + SessionUiModel tests (neon, no phone)
 [ ] T053 P1 lite mode wired into GuestLaunch/SessionController (neon, no phone)
 [ ] T054 P1 audio in APK: liblodos_audio.so + AudioBridge in FGS + guest pulse snippet (neon, no phone)
+[ ] T055 S1-alt Venus+virglrenderer vtest on phone vs vk-bridge (neon, phone, after T043)
+[ ] T056 S1-alt in-process Vulkan wrapper ICD on phone vs vk-bridge (neon, phone, after T043)
 (live status: task files frontmatter)
 
 ## OPEN (need user)
 - 2026-11-27 21:30 COORD: T025-T028 set status:hold so T043 (phosh on phone) runs right after T051. After T043 finishes (done or failed), set T025-T028 back to status: todo.
 - 2026-11-27 USER: before GitHub release add (a) in-app bug-report/log collector (one button: logs+device info -> shareable file/issue template), (b) lite mode for 400-600k AnTuTu / 4-6GB devices (no animations, zram, smaller rootfs). Later Claude manages community (issues, contributors).
 - 2026-11-27 USER DIRECTIVE (game mode, after zink+game mode base): own open-source Vulkan layer "lodos-fg" (standalone repo-able, also works on desktop Linux). Features selectable in app settings + per-game: (1) FSR1+CAS spatial upscale, any game, presets quality/balanced/performance; (2) FSR2/FSR3 temporal upscale where game exposes it (OptiScaler-style DLSS/XeSS->FSR swap), prefer FSR3; (3) frame generation: generic (no motion vectors) via FidelityFX (MIT) optical flow + frame interpolation, Lossless-Scaling/AFMF-like, x2 target 30->60 on Mali; FSR3 FG where game provides MVs. No proprietary Lossless.dll in APK. Order: FSR1 layer (PC test) -> generic FG (PC) -> Mali perf tuning -> FSR2/3 path. Reviewer: split into tasks when game mode phase starts.
+- 2026-11-27 USER DIRECTIVE reuse-first: before writing a component, check existing OSS. Candidates: Venus+virglrenderer (GPU, T055), Winlator/GameNative vulkan wrapper (T056), Winlator/GameNative box64/wine/dxvk configs (P2/P3 reference, check license), Turnip (P4), vkBasalt + AMD FidelityFX SDK MIT (lodos-fg), gamescope (game mode), Termux pulseaudio AAudio module (audio, vs T049/T054). Upstream: fixes to these projects go to patches/<project>/ with description; reviewer lists them in ai.md; sending PRs/issues upstream only after user OK per PR (public posting).
 - 2026-11-27 USER DIRECTIVE: priority = first visible desktop (phosh). phone away ~09:30-evening -> plan PC-only desktop path now (lodos-wl headless/xdg-shell/seat on PC, phoc nested via wayland backend WLR_RENDERER=pixman, then phosh, screenshot proof); phone tasks after replug. GPU accel (zink over bridge) later.
 (none)
 
