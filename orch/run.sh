@@ -96,7 +96,6 @@ $prev"
     st=$(agy_status "$out"); log "AGY $id a$att -> $st"
     if [ "$st" = QUOTA ]; then
       setf "$f" attempts "$((att-1))"; setf "$f" status todo
-      n=$(( $(cat "$S/agy_quota_count" 2>/dev/null || echo 0) + 1 )); echo $n > "$S/agy_quota_count"
       [ "$n" -ge 2 ] && maybe_shutdown "agy kotasi ikinci kez bitti"
       echo $(( $(date +%s) + AGY_COOLDOWN )) > "$S/agy_limited_until"
       log "agy quota -> claude takes over for ${AGY_COOLDOWN}s"; return 0

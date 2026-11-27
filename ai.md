@@ -7,7 +7,7 @@ agy:~/.gemini/bin/agy -p "<task>" --model M --output-format json --dangerously-s
 models: default=gemini-4-neon-high | hard=gemini-4-carbon-high | trivial=gemini-4-neon-low
 rules: minimize claude tokens; never re-read chat history; this file = source of truth; daily checklist -> ~/Masaüstü/LodOS-YYYY-MM-DD.md
 orch: orch/run.sh loop(next todo task->agy->accept script->git commit; last attempt=carbon; max fail->blocked) | review.sh=claude -p checkpoint every 2 done/blocked or when queue empty (cooldown 1h on claude limit) | checklist.sh->desktop | tasks: orch/tasks/T###.md (FORMAT.md) accept: orch/accept/
-shutdown policy: agy quota -> claude implements (3h agy cooldown) | claude limit while agy out -> shutdown | no runnable work -> notify 5min w/ cancel -> systemctl poweroff | touch orch/NO_SHUTDOWN disables
+shutdown policy: agy quota -> claude implements (3h agy cooldown), then agy resumes; alternates forever | claude limit while agy out -> shutdown (waits if agy back <=90min) | no runnable work -> notify 5min w/ cancel -> systemctl poweroff | touch orch/NO_SHUTDOWN disables
 phone keeper: lodos-phone.service (orch/phone/watch.sh) runs keeper.sh on phone: brightness 0 after 1min no input while work active; restores on input/unplug/screen-off; phone batt<=15% -> lock phone, stop runner, commit, poweroff PC
 sudo: none given; agents write NEEDS_ROOT in NOTES -> status user -> user runs cmd
 
