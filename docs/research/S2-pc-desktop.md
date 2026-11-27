@@ -61,3 +61,29 @@
 - Client: `tools/wlctl.py <sock> tap x y [ms] | swipe x0 y0 x1 y1 ms | click x y | key code.. | type 'text' | dump out.ppm | raw 'line'..` (python3 -I, stdlib socket only). `type` uses a US layout with shift (KEY_LEFTSHIFT=42), and `\n` is Enter.
 - Test: `ctl::tests::ctl_protocol_parser` (cargo test --features headless).
 - The wlroots wayland backend in phoc takes wl_touch from the host seat as a touch device. phosh gestures (lockscreen swipe, taps) work with touch alone, and no pointer emulation was needed.
+
+## T045: PC guest boots via lodos-init (musl x86_64) as the guest "PID1"
+- `scripts/pc-desktop.sh init-phosh`: lodos-wl headless 720x1600 runs on the host. `scripts/pc-guest-init.sh` (idempotent) builds lodos-init (scripts/build-init.sh x86_64, static musl) and installs it as guest `/sbin/lodos-init`. `/sbin/init` is untouched. Then `proot ... /sbin/lodos-init --target=lodos-phosh.target --log=/tmp/lodos-desk/init.log --stop-timeout-ms=3000` runs, the screen is dumped to docs/screens/T045-init-phosh.png (phosh lockscreen), and lodos-init gets SIGTERM. The script then checks that every guest pid recorded before the SIGTERM is gone and that the log contains `lodos-init exited cleanly`. Log: build/T045-init-phosh.log. Wall time is about 12 s.
+- Under proot, lodos-init is not a real PID1 because there is no pid namespace. It is the guest's root process and a subreaper, so orphans would reparent to it.
+- Units are standard systemd .service files in guest /etc/systemd/system, enabled by symlinks in `lodos-phosh.target.wants/`:
+  - `dbus.service` overrides the stock unit by name (etc/ beats usr/lib). The stock one uses `--address=systemd:`, `User=messagebus` and Type=notify. ExecStartPre `sysbus-prep` sets up the machine-id and writes /run/lodos/system.conf (the T038 edits). ExecStart is `dbus-daemon --nofork`.
+  - `elogind.service` waits for the system bus socket in ExecStartPre, then runs `/usr/libexec/elogind`. The stock rootfs has no elogind unit, and the lodos-init builtin candidate paths miss `/usr/libexec/elogind`. That is harmless here because the unit file exists.
+  - `lodos-sessbus.service` is a session dbus-daemon on unix:path=/run/lodos/session_bus. It replaces dbus-run-session, so every process is a unit main pid.
+  - `lodos-phoc.service` waits in ExecStartPre for login1, the session bus, and the host `$XDG_RUNTIME_DIR/$WAYLAND_DISPLAY`, and removes a stale wayland-0. It then runs `phoc -C /tmp/lodos-desk-phoc.ini` (no -E). WAYLAND_DISPLAY, XDG_RUNTIME_DIR and WLR_* are inherited from lodos-init's env.
+  - `lodos-phosh.service` waits for phoc's `wayland-0`, then runs `/usr/libexec/phosh` as a plain client. phoc exposes the phosh protocols to it without -E.
+- Readiness: lodos-init treats simple units as active once spawned, so dependents poll in ExecStartPre with `/usr/local/lib/lodos/wait-for sock|bus`. ExecStartPre runs synchronously, so the start order is effectively serialized.
+- Boot log excerpt (ms from lodos-init start):
+  ```
+  +0    lodos-init starting (root=/, target=lodos-phosh.target); loaded 18 unit(s)
+  +3    starting dbus.service            -> started +13
+  +13   starting elogind.service         -> started +127 (waits for system_bus_socket)
+  +127  starting lodos-sessbus.service   -> started +128
+  +128  starting lodos-phoc.service      -> started +161 (login1 already up)
+  +161  starting lodos-phosh.service     -> started +274; "Phosh ready after 0.15s"
+  SIGTERM: shutting down 5 unit(s) in reverse dependency order: lodos-phosh, lodos-phoc, lodos-sessbus, elogind, dbus
+  phosh exits rc=0 after ~1.9-2.3 s (slowest; under the 3 s stop timeout), phoc/sessbus/elogind/dbus ~15 ms each
+  lodos-init exited cleanly; proot exits; 0 orphans
+  ```
+- Timings: lodos-init start to phosh spawned is about 0.27 s, and the lockscreen is mapped in lodos-wl under 1 s after guest start. Shutdown takes about 2 s, almost all of it phosh. No lodos-init code change was needed, and all 16 tests still pass.
+- Gotcha: the D3 core order (dbus, then elogind first) only applies in BootstrapMode::Auto when units named dbus.service/elogind.service exist. Overriding by name keeps that path in use. All other stock units in the rootfs (getty, networkd, ...) are ignored because only `lodos-phosh.target.wants` is read.
+- Phone port next: the same units with an aarch64 build. The phone also needs the T021 shims (unix2abstract, elogind-shim) as Environment=LD_PRELOAD in the dbus/elogind units.

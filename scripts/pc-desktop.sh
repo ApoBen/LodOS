@@ -1,12 +1,15 @@
 #!/usr/bin/env bash
 # PC desktop bring-up: lodos-wl headless (host) -> phoc nested (guest, wlroots wayland backend, pixman) -> foot.
-# usage: scripts/pc-desktop.sh [foot|phosh|phosh-home]
+# usage: scripts/pc-desktop.sh [foot|phosh|phosh-home|init-phosh]
 #   foot  (default): phoc -E foot running a colour demo -> docs/screens/T037-phoc-foot.png
 #   phosh: guest system dbus + elogind, then session dbus + phoc -E phosh -> docs/screens/T038-phosh.png,
 #          guest stderr (phoc/phosh) -> build/T038-phosh.log
 #   phosh-home: phosh session + lodos-wl control socket (LODOS_WL_CTL, driven by tools/wlctl.py):
 #          swipe-unlock (guest /etc/pam.d/phosh = pam_permit), app grid, tap foot ->
 #          docs/screens/T042-phosh-{unlocked,grid,foot}.png, guest log -> build/T042-phosh.log
+#   init-phosh: T045 guest boots via /sbin/lodos-init (scripts/pc-guest-init.sh units: dbus -> elogind ->
+#          session bus -> phoc -> phosh) -> docs/screens/T045-init-phosh.png, then SIGTERM lodos-init and
+#          check every guest proc exited (no orphans); lodos-init log -> build/T045-init-phosh.log
 # out:   PNG above (+ build/pc-desktop/{fb.ppm,lodos-wl.log,guest.log})
 # env:   PC_DESKTOP_W/H (720x1600), PC_DESKTOP_WAIT (s after client maps; 4 foot / 8 phosh), PC_DESKTOP_TIMEOUT (60)
 #        PC_DESKTOP_HOLD=1 (phosh-home: skip the scripted gestures, keep session up until killed; ctl at $RUN/ctl)
@@ -30,6 +33,8 @@ case "$MODE" in
          PHOSH_LOG=$ROOT/build/T038-phosh.log;;
   phosh-home) PNG=; CLIENT=phosh; SETTLE=${PC_DESKTOP_WAIT:-8}
          PHOSH_LOG=$ROOT/build/T042-phosh.log;;
+  init-phosh) PNG=docs/screens/T045-init-phosh.png; CLIENT=phosh; SETTLE=${PC_DESKTOP_WAIT:-8}
+         PHOSH_LOG=$ROOT/build/T045-init-phosh.log;;
   *) log "unknown mode $MODE"; exit 2;;
 esac
 [ -x "$RFS/usr/bin/phoc" ] || { log "guest missing phoc -> run scripts/pc-guest.sh setup"; exit 1; }
@@ -97,7 +102,11 @@ printf '[core]\nxwayland=false\n\n[output:WL-1]\nmode=%dx%d\nscale=1\n' "$W" "$H
 
 GENV=()
 [ "$MODE" = phosh-home ] && GENV=(LODOS_PHOSH_NOAUTH=1)
-if [ "$MODE" != foot ]; then
+if [ "$MODE" = init-phosh ]; then
+  bash scripts/pc-guest-init.sh
+  mkdir -p "$RFS/tmp/lodos-desk"; rm -f "$RFS/tmp/lodos-desk/init.log"
+  GCMD=(/sbin/lodos-init --target=lodos-phosh.target --log=/tmp/lodos-desk/init.log --stop-timeout-ms=3000)
+elif [ "$MODE" != foot ]; then
   install -m 755 scripts/pc-phosh-session.sh "$RFS/tmp/lodos-desk-phosh.sh"
   GCMD=(/tmp/lodos-desk-phosh.sh /tmp/lodos-desk-phoc.ini)
 else
@@ -138,6 +147,28 @@ kill -USR1 "$WL_PID"
 for _ in $(seq 50); do [ "$(grep -c "dumped PPM" "$OUT/lodos-wl.log" || true)" -gt "$n0" ] && break; sleep 0.1; done
 [ -s "$OUT/fb.ppm" ] || { log "no framebuffer dump"; cat "$OUT/lodos-wl.log" >&2; exit 1; }
 python3 -I scripts/ppm2png.py "$OUT/fb.ppm" "$PNG"
+
+if [ "$MODE" = init-phosh ]; then
+  # clean shutdown: SIGTERM lodos-init -> reverse-order unit stop; proot exits once init exits
+  gpids=$(descendants "$G_PID" | tr "\n" " " || true)
+  ipid=; for p in $gpids; do [ "$(ps -o comm= -p "$p" 2>/dev/null || true)" = lodos-init ] && { ipid=$p; break; }; done
+  [ -n "$ipid" ] || { log "lodos-init pid not found"; exit 1; }
+  log "SIGTERM lodos-init (host pid $ipid); guest procs: $(echo $gpids | wc -w)"
+  t1=$SECONDS; kill -TERM "$ipid"
+  for _ in $(seq 300); do kill -0 "$G_PID" 2>/dev/null || break; sleep 0.1; done
+  if kill -0 "$G_PID" 2>/dev/null; then log "guest still running 30s after SIGTERM"; exit 1; fi
+  wait "$G_PID" 2>/dev/null || true; G_PID=
+  log "guest exited $((SECONDS - t1))s after SIGTERM"
+  left=; for p in $gpids; do kill -0 "$p" 2>/dev/null && left+="$(ps -o pid=,comm= -p "$p" || echo "$p") "; done
+  [ -z "$left" ] || { log "orphans left: $left"; exit 1; }
+  ILOG=$RFS/tmp/lodos-desk/init.log
+  grep -q "lodos-init exited cleanly" "$ILOG" || { log "lodos-init did not exit cleanly"; tail -20 "$ILOG" >&2; exit 1; }
+  cleanup
+  { cat "$ILOG"; echo "== guest stdout =="; cat "$OUT/guest.log"; } >"$PHOSH_LOG"; log "init log: $PHOSH_LOG"
+  if pgrep -x 'lodos-init|phosh|phoc' >/dev/null; then log "leftover guest procs"; exit 1; fi
+  log "done: $PNG"
+  exit 0
+fi
 
 cleanup
 if [ -n "${PHOSH_LOG:-}" ]; then cp "$OUT/guest.log" "$PHOSH_LOG"; log "phosh log: $PHOSH_LOG"; fi
