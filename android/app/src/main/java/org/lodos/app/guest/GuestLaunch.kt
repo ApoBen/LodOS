@@ -67,6 +67,7 @@ object GuestLaunch {
             "WAYLAND_DISPLAY" to spec.waylandDisplay,
         )
         spec.lite?.let { e.putAll(LiteMode.toGuestEnv(it)) }
+        if (spec.lite != null) e["LODOS_GSETTINGS_OVERRIDE"] = "$GUEST_SCHEMA_DIR/99-lodos.gschema.override"
         e.putAll(spec.extraEnv)
         return e
     }
@@ -91,9 +92,17 @@ object GuestLaunch {
         )
         p.sdcard?.let { a += listOf("-b", "$it:/sdcard") }
         spec.extraBinds.forEach { (h, g) -> a += listOf("-b", "$h:$g") }
+        spec.lite?.let { profile ->
+            val override = File(p.filesDir, "lite/99-lodos.gschema.override")
+            override.parentFile?.mkdirs()
+            override.writeText(LiteMode.toGsettings(profile).joinToString("\n", postfix = "\n"))
+            a += listOf("-b", "${override.absolutePath}:$GUEST_SCHEMA_DIR/99-lodos.gschema.override")
+        }
         a += listOf("-w", spec.workDir, "/usr/bin/env", "-i")
         guestEnv(spec).forEach { (k, v) -> a += "$k=$v" }
         a += effectiveCmd(spec)
         return a
     }
+
+    private const val GUEST_SCHEMA_DIR = "/usr/share/glib-2.0/schemas"
 }

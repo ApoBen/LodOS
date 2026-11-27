@@ -21,7 +21,9 @@ User override (`LiteModeStore.userForce`): true -> LOW profile, false -> HIGH pr
 
 ## TODO
 - zram: needs root (swapon/zram sysfs). Rootless (proot) => no zram; zramMb stays 0. Use guest-side memory limits instead: smaller "minimal" rootfs, fewer autostart services, lower fps, no animations.
-- wire: AndroidDeviceSpec.read (GPU renderer from GL/Vulkan probe) -> resolve -> pass env to guest launch, apply gsettings via lodos-init.
+- GuestSessionService resolves the saved user override and device tier when it builds each guest spec; GuestLaunch exports profile env and binds `filesDir/lite/99-lodos.gschema.override` into the guest schema directory.
+- The bound GLib override records the profile's `enable-animations` value; a guest that changes schemas must run `glib-compile-schemas /usr/share/glib-2.0/schemas` before starting GSettings clients.
+- A null profile keeps the original argv and environment; the current service always resolves auto or forced mode before launch.
 - build/ship a "minimal" rootfs flavor.
 - compositorScale/maxFps consumption in lodos_wl compositor.
 - UI toggle for userForce.

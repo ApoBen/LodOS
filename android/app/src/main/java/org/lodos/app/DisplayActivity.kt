@@ -12,6 +12,9 @@ import android.view.WindowInsetsController
 import android.view.WindowManager
 import java.io.File
 import java.util.concurrent.TimeUnit
+import org.lodos.app.guest.GuestLaunch
+import org.lodos.app.guest.GuestPaths
+import org.lodos.app.guest.GuestSpec
 
 /**
  * T022 (S2 v0): Fullscreen Wayland SurfaceView host.
@@ -52,7 +55,11 @@ class DisplayActivity : Activity(), SurfaceHolder.Callback {
         if (autoClient && !clientStarted) {
             clientStarted = true
             val bench = intent?.getIntExtra("bench", 0) ?: 0
-            spawnShmFill(runDir, sockPath, bench)
+            if (intent?.getStringExtra("client") == "guest") {
+                spawnGuest(runDir)
+            } else {
+                spawnShmFill(runDir, sockPath, bench)
+            }
         }
     }
 
@@ -107,6 +114,52 @@ class DisplayActivity : Activity(), SurfaceHolder.Callback {
                 Log.e(TAG, "client failed: ${t.javaClass.simpleName}: ${t.message}")
             }
         }, "lodos-shmfill").start()
+    }
+
+    /** T028: run a Debian wl_shm client at the app uid through the same socket as local clients. */
+    private fun spawnGuest(runDir: File) {
+        Thread({
+            try {
+                val rootfs = File(filesDir, "rootfs")
+                val prootTmp = File(cacheDir, "proot-tmp").apply { mkdirs() }
+                val shmDir = File(filesDir, "shm").apply { mkdirs() }
+                val paths = GuestPaths(
+                    nativeLibDir = applicationInfo.nativeLibraryDir,
+                    filesDir = filesDir.absolutePath,
+                    rootfsDir = rootfs.absolutePath,
+                    runDir = runDir.absolutePath,
+                    tmpDir = prootTmp.absolutePath,
+                    shmDir = shmDir.absolutePath,
+                )
+                val spec = GuestSpec(
+                    paths = paths,
+                    cmd = listOf("/bin/sh", "-lc", """
+                        set -e
+                        mkdir -p /etc/apt/apt.conf.d /etc/dpkg/dpkg.cfg.d
+                        printf '%s\\n' 'APT::Sandbox::User \"root\";' 'APT::Install-Recommends \"false\";' > /etc/apt/apt.conf.d/01lodos
+                        printf '%s\\n' 'force-unsafe-io' > /etc/dpkg/dpkg.cfg.d/01lodos
+                        if [ -L /etc/resolv.conf ] || ! grep -q '^nameserver' /etc/resolv.conf 2>/dev/null; then
+                          rm -f /etc/resolv.conf; printf 'nameserver 8.8.8.8\\nnameserver 1.1.1.1\\n' > /etc/resolv.conf
+                        fi
+                        if ! command -v weston-simple-shm >/dev/null 2>&1; then apt-get update -q && apt-get install -y -q --no-install-recommends weston; fi
+                        timeout 5s weston-simple-shm
+                    """.trimIndent()),
+                    workDir = "/root",
+                )
+                val argv = listOf(GuestLaunch.prootPath(paths)) + GuestLaunch.buildArgv(spec).drop(1)
+                val pb = ProcessBuilder(argv)
+                pb.environment().putAll(GuestLaunch.buildEnv(spec))
+                val logFile = File(cacheDir, "guest-wl-client.log")
+                pb.redirectErrorStream(true).redirectOutput(logFile)
+                Log.i(TAG, "starting Debian guest wl_shm client rootfs=${rootfs.absolutePath} display=/run/lodos/wayland-0")
+                val p = pb.start()
+                clientProc = p
+                val rc = p.waitFor()
+                Log.i(TAG, "guest client exited rc=$rc out=${logFile.takeIf { it.exists() }?.readText()?.trim()?.replace('\n', '|') ?: ""}")
+            } catch (t: Throwable) {
+                Log.e(TAG, "guest client failed: ${t.javaClass.simpleName}: ${t.message}")
+            }
+        }, "lodos-guest-wl-client").start()
     }
 
     private external fun start(socketPath: String, surface: Surface)
