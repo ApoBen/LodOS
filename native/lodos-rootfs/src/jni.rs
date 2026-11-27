@@ -91,3 +91,14 @@ pub unsafe extern "system" fn Java_org_lodos_app_setup_NativeRootfs_extract(
         }
     }
 }
+
+/// JNI entry used by the app-uid rootfs probe.
+#[no_mangle]
+pub unsafe extern "system" fn Java_org_lodos_app_ProbeActivity_extractRootfsNative(
+    env: *mut JNIEnv,
+    _class_or_obj: jobject,
+    src: jstring,
+    dst: jstring,
+) -> jstring {
+    Java_org_lodos_app_setup_NativeRootfs_extract(env, _class_or_obj, src, dst)
+}

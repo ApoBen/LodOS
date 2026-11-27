@@ -27,13 +27,15 @@ class ProbeActivity : Activity() {
         val mode = intent?.getStringExtra("probe") ?: intent?.getStringExtra("action") ?: "default"
         if (mode == "rootfs") {
             val tarball = intent?.getStringExtra("tarball") ?: DEFAULT_TARBALL
-            Thread({ runRootfsProbe(tarball) }, "lodos-rfs-probe").start()
+            val rootfsName = intent?.getStringExtra("rootfs") ?: "rootfs"
+            Thread({ runRootfsProbe(tarball, rootfsName) }, "lodos-rfs-probe").start()
         } else {
             Thread({ runProbe() }, "lodos-probe").start()
         }
     }
 
     private external fun probeDmaHeapNative(): String
+    private external fun extractRootfsNative(src: String, dst: String): String
 
     private fun log(msg: String) = Log.i(TAG, msg)
 
@@ -100,7 +102,7 @@ class ProbeActivity : Activity() {
 
     private data class CmdRes(val rc: Int, val out: String, val err: String, val ms: Long, val timedOut: Boolean = false)
 
-    private fun runRootfsProbe(tarballArg: String) {
+    private fun runRootfsProbe(tarballArg: String, rootfsName: String) {
         val tAll = System.currentTimeMillis()
         try {
             log("uid=${Process.myUid()}")
@@ -115,7 +117,8 @@ class ProbeActivity : Activity() {
             }
             log("DMAHEAP $dma")
 
-            val rootfs = File(filesDir, "rootfs")
+            require(rootfsName == "rootfs" || rootfsName == "rootfs2") { "invalid rootfs name" }
+            val rootfs = File(filesDir, rootfsName)
             val prootTmp = File(cacheDir, "proot-tmp").apply { mkdirs() }
             val shmDir = File(filesDir, "shm").apply { mkdirs() }
             try {
@@ -234,48 +237,33 @@ class ProbeActivity : Activity() {
         }
         log("RFS tarball src=${src.absolutePath} size=${src.length()} (${diag.joinToString("; ")})")
 
-        val tmpDir = File(filesDir, "rootfs.tmp")
+        val tmpDir = File(filesDir, "${rootfs.name}.tmp")
         cleanTree(tmpDir)
         cleanTree(rootfs)
         tmpDir.mkdirs()
 
         val t0 = System.currentTimeMillis()
-        val outF = File(cacheDir, "rfs-extract.out")
-        val errF = File(cacheDir, "rfs-extract.err")
-        val pb = ProcessBuilder(
-            "$nlib/libproot.so",
-            "--link2symlink",
-            "-0",
-            "/system/bin/tar",
-            "-xzf", src.absolutePath,
-            "-C", tmpDir.absolutePath
-        )
-        pb.environment()["PROOT_LOADER"] = "$nlib/libproot_loader.so"
-        pb.environment()["PROOT_TMP_DIR"] = prootTmp.absolutePath
-        val p = pb.redirectOutput(outF).redirectError(errF).start()
-        val finished = p.waitFor(600, TimeUnit.SECONDS)
-        val ms = System.currentTimeMillis() - t0
-        if (!finished) {
-            p.destroyForcibly()
-            log("RFS extract fail timeout (${ms}ms) err=${tail(errF.readText())}")
+        val summary = try {
+            extractRootfsNative(src.absolutePath, tmpDir.absolutePath)
+        } catch (t: Throwable) {
+            log("RFS extract fail native ${t.javaClass.simpleName}:${t.message}")
             return false
         }
-        val rc = p.exitValue()
-        val err = errF.takeIf { it.exists() }?.readText() ?: ""
+        val ms = System.currentTimeMillis() - t0
         val okFiles = File(tmpDir, "bin/sh").exists() && File(tmpDir, "etc/debian_version").exists()
         if (!okFiles) {
-            log("RFS extract fail rc=$rc (${ms}ms) missing bin/sh or debian_version err=${tail(err)}")
+            log("RFS extract fail native (${ms}ms) missing bin/sh or debian_version summary=$summary")
             return false
         }
         if (!tmpDir.renameTo(rootfs)) {
-            log("RFS extract fail rename ${tmpDir.absolutePath} -> ${rootfs.absolutePath}")
+            log("RFS extract fail native rename ${tmpDir.absolutePath} -> ${rootfs.absolutePath}")
             return false
         }
         // Clean staged copy in cacheDir/filesDir if used (never delete /data/local/tmp)
         if (src.parentFile == cacheDir || src.parentFile == filesDir) {
             src.delete()
         }
-        log("RFS extract ok tar_rc=$rc (${ms}ms)${if (err.isNotBlank()) " err=${tail(err, 150)}" else ""}")
+        log("RFS extract ok native $ms summary=$summary")
         return true
     }
 
@@ -341,6 +329,7 @@ class ProbeActivity : Activity() {
 
         init {
             System.loadLibrary("lodos_native")
+            System.loadLibrary("lodos_rootfs")
         }
     }
 }

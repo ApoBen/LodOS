@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # T020: build APK with jniLibs, push Debian trixie rootfs tar.gz, run ProbeActivity(probe=rootfs)
 # at app uid (untrusted_app) -> extract rootfs, apt-get update/install hello, probe /dev/dma_heap/system.
-# Env: FORCE=1 forces re-extraction of app rootfs.
+# Env: ROOTFS=rootfs2 selects an alternate app rootfs; FRESH=1 clears it first.
+# FORCE=1 retains the original T020 behavior and clears rootfs.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 source orch/env.sh
@@ -11,6 +12,8 @@ PKG=org.lodos.app
 APK=android/app/build/outputs/apk/debug/app-debug.apk
 L=/data/local/tmp/lodos
 REMOTE_TGZ=$L/debian-trixie-arm64.tar.gz
+ROOTFS=${ROOTFS:-rootfs}
+[[ "$ROOTFS" == rootfs || "$ROOTFS" == rootfs2 ]] || { echo "invalid ROOTFS=$ROOTFS" >&2; exit 2; }
 
 # 1. Stage jniLibs & build APK
 bash scripts/stage-jnilibs.sh
@@ -35,13 +38,13 @@ if [ ! -f "$TGZ" ] || [ "$(cat "$TGZ.src-sha" 2>/dev/null || true)" != "$SHA" ];
 fi
 
 # 3. Handle FORCE=1 or check if app already has extracted rootfs
-if [ "${FORCE:-0}" = 1 ]; then
-  echo "FORCE=1: wiping app rootfs..."
-  $A shell "run-as $PKG sh -c 'chmod -R u+rwx files/rootfs files/rootfs.tmp 2>/dev/null; rm -rf files/rootfs files/rootfs.tmp'" || true
+if [ "${FORCE:-0}" = 1 ] || [ "${FRESH:-0}" = 1 ]; then
+  echo "fresh extraction: wiping app $ROOTFS..."
+  $A shell "run-as $PKG sh -c 'chmod -R u+rwx files/$ROOTFS files/$ROOTFS.tmp 2>/dev/null; rm -rf files/$ROOTFS files/$ROOTFS.tmp'" || true
 fi
 
 has_rootfs=0
-if $A shell "run-as $PKG test -f files/rootfs/etc/debian_version" 2>/dev/null; then
+if $A shell "run-as $PKG test -f files/$ROOTFS/etc/debian_version" 2>/dev/null; then
   has_rootfs=1
   echo "app rootfs already present (skipping tarball push)"
 fi
@@ -62,7 +65,7 @@ fi
 # 4. Run ProbeActivity in rootfs mode at app uid
 $A shell am force-stop $PKG || true
 $A logcat -c
-$A shell am start -W -n $PKG/.ProbeActivity -e probe rootfs -e tarball "$REMOTE_TGZ" >/dev/null
+$A shell am start -W -n $PKG/.ProbeActivity -e probe rootfs -e rootfs "$ROOTFS" -e tarball "$REMOTE_TGZ" >/dev/null
 
 # Wait up to 15m (450 * 2s) for RFS_DONE
 done_flag=0
