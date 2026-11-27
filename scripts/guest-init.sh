@@ -14,6 +14,12 @@ SERIAL=${SERIAL:-<phone-serial>}
 LOG=${LOG:-/tmp/lodos-guest-init.log}
 : > "$LOG"
 
+# A regular directory is writable by Android's shell uid and is exposed as a
+# cgroup2-shaped tree by the elogind preload shim (statfs + control files).
+CGROUP_HOST=$L/fake-cgroup
+adb -s "$SERIAL" shell "mkdir -p $CGROUP_HOST && chmod 0777 $CGROUP_HOST && : > $CGROUP_HOST/cgroup.controllers && : > $CGROUP_HOST/cgroup.procs && : > $CGROUP_HOST/cgroup.subtree_control && chmod 0666 $CGROUP_HOST/cgroup.*"
+export EXTRA_BINDS="-b $CGROUP_HOST:/sys/fs/cgroup"
+
 # Chosen systemd-free package set (Debian 13 trixie arm64):
 #   install: sysvinit-core elogind libpam-elogind dbus-x11 libglib2.0-bin
 #            (pulls initscripts insserv startpar sysv-rc systemd-standalone-sysusers)
@@ -108,6 +114,12 @@ cleanup() {
 trap cleanup EXIT INT TERM
 
 mkdir -p /run/dbus /run/systemd /tmp/xdg
+mkdir -p /run/systemd/inhibit
+# A prior proot run can leave runtime records after its daemon is killed; the
+# referenced PIDs no longer exist and elogind aborts while restoring the stale
+# session. This init owns the isolated guest daemon, so discard those records.
+mkdir -p /run/systemd/sessions /run/systemd/seats
+rm -f /run/systemd/sessions/* /run/systemd/seats/* /run/elogind.pid
 chmod 700 /tmp/xdg
 rm -f /run/dbus/pid
 
@@ -142,7 +154,7 @@ EPID=$!
 login1_ok=0
 login1_err=""
 for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do
-  if busctl --system list 2>/dev/null | grep -qE "^org\.freedesktop\.login1[[:space:]]+[0-9]+" \
+  if busctl --system list 2>/dev/null | grep -q "org.freedesktop.login1" \
      && gdbus call --system -d org.freedesktop.login1 -o /org/freedesktop/login1 -m org.freedesktop.DBus.Peer.Ping >/dev/null 2>&1; then
     login1_ok=1
     break
@@ -169,6 +181,48 @@ else
   [ -z "$login1_err" ] && login1_err="$ping_out"
   echo "INIT login1 fail $login1_err"
   exit 1
+fi
+
+# Owning the bus name precedes seat initialization. Wait for the manager
+# seat query to succeed before PAM asks it to create a session.
+seats_ok=0
+for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do
+  if loginctl list-seats >/dev/null 2>&1; then
+    seats_ok=1
+    break
+  fi
+  sleep 0.2
+done
+if [ "$seats_ok" -ne 1 ]; then
+  echo "INIT seat-list fail $(cat /tmp/lodos-elogind.log | tr "\n" " " | head -c 160)"
+  exit 1
+fi
+
+# PAM opens the elogind session; the cgroup shim creates the writable scope
+# directory and its minimal controller files under the fake cgroup bind.
+su -l root -c "sleep 2" >/tmp/lodos-su-session.log 2>&1 || true
+sessions=$(loginctl list-sessions --no-legend 2>/dev/null || true)
+if [ -n "$sessions" ]; then
+  sid=${sessions%% *}
+  echo "INIT session ok $sid"
+else
+  echo "INIT session fail $(tr "\n" " " < /tmp/lodos-su-session.log | head -c 120)"
+fi
+
+# elogind creates inhibitor state here; ensure the runtime directory exists,
+# then request a short-lived idle inhibitor while this shell command runs.
+su -l root -c "DBUS_SYSTEM_BUS_ADDRESS=unix:abstract=/run/dbus/system_bus_socket busctl --system call org.freedesktop.login1 /org/freedesktop/login1 \
+  org.freedesktop.login1.Manager Inhibit ssss idle lodos verify block" \
+  >/tmp/lodos-inhibit.log 2>&1 && inhibit_ok=1 || inhibit_ok=0
+if [ "$inhibit_ok" -ne 1 ] && command -v elogind-inhibit >/dev/null 2>&1; then
+  su -l root -c "elogind-inhibit --what=idle true" >>/tmp/lodos-inhibit.log 2>&1 && inhibit_ok=1 || true
+elif [ "$inhibit_ok" -ne 1 ] && command -v systemd-inhibit >/dev/null 2>&1; then
+  su -l root -c "systemd-inhibit --what=idle true" >>/tmp/lodos-inhibit.log 2>&1 && inhibit_ok=1 || true
+fi
+if [ "${inhibit_ok:-0}" -eq 1 ]; then
+  echo "INIT inhibit ok"
+else
+  echo "INIT inhibit fail $(tr "\n" " " < /tmp/lodos-inhibit.log | head -c 120)"
 fi
 
 # 3. Re-run phosh 10s inside headless phoc with system bus + elogind active
