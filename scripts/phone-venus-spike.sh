@@ -76,7 +76,7 @@ if timeout 600 env NOBUILD=1 bash scripts/guest-vkwork-test.sh >>"$LOG" 2>&1; th
   # Record a clearly identified offscreen triangle throughput proxy instead.
   adb -s "$SERIAL" shell "cd /data/local/tmp/lodos/vkb-icd && (LODOS_VK_SOCK=@lodos-vk-g ./vkb_server > /data/local/tmp/lodos/T055-bridge.log 2>&1 & echo \$! > $BASELINE_PIDFILE)"
   sleep 0.5
-  if timeout 120 bash scripts/phone-run.sh "LODOS_VK_SOCK='@lodos-vk-g' VK_ICD_FILENAMES='/usr/share/vulkan/icd.d/lodos_icd.json' python3 -c 'import os,subprocess,time; n=12; t=time.perf_counter(); env=dict(os.environ); [subprocess.run(['/root/vkb-icd/triangle','/tmp/T055-triangle.ppm'],env=env,check=True,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL) for _ in range(n)]; dt=time.perf_counter()-t; print(f'BRIDGE_TRIANGLE_FPS={n/dt:.6f}')'" >>"$LOG" 2>&1; then
+  if timeout 120 bash scripts/phone-run.sh "LODOS_VK_SOCK='@lodos-vk-g' VK_ICD_FILENAMES='/usr/share/vulkan/icd.d/lodos_icd.json' python3 -c 'import os,subprocess,time; n=12; t=time.perf_counter(); env=dict(os.environ); [subprocess.run([\"/root/vkb-icd/triangle\",\"/tmp/T055-triangle.ppm\"],env=env,check=True,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL) for _ in range(n)]; dt=time.perf_counter()-t; print(f\"BRIDGE_TRIANGLE_FPS={n/dt:.6f}\")'" >>"$LOG" 2>&1; then
     BRIDGE_FPS=$(sed -n 's/^BRIDGE_TRIANGLE_FPS=//p' "$LOG" | tail -1)
     [[ "$BRIDGE_FPS" =~ ^[0-9]+([.][0-9]+)?$ ]] || BRIDGE_FPS=0
   else
@@ -126,10 +126,14 @@ integrate this with LodOS's AHardwareBuffer presentation path.
 
 ## Measurements
 
-No comparable vkcube measurement was obtained. The bridge smoke script stops
-during guest C compilation with `-Werror=maybe-uninitialized` warnings for
-`rep` and `replen` in `client/vkbc.c`, and provides no vkcube mode. Venus vkcube
-and Zink FPS are null in the JSON. The spike cleans its own phone processes.
+No comparable vkcube measurement was obtained. Debian's `vkcube` offers X11,
+Wayland, and display WSI modes, while this guest has no WSI socket and the bridge
+ICD has no headless WSI. The script records 12 successful offscreen triangle
+runs per second as a bridge throughput proxy in the required numeric
+`bridge_vkcube_fps` field; it is explicitly not comparable to Venus vkcube.
+The guest bridge compile issue was fixed by initializing the reply pointer and
+length in `client/vkbc.c`. Venus vkcube and Zink FPS remain null. The spike
+cleans its own phone processes.
 
 ## Recommendation
 
