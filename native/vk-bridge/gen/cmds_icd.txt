@@ -267,3 +267,11 @@ vkCmdSetFragmentShadingRateKHR
 vkGetMemoryFdKHR
 vkGetMemoryFdPropertiesKHR
 
+# T041 external sync FDs (fds via SCM_RIGHTS, custom ICD+server wrappers) + VK1.4 core cmds
+vkGetSemaphoreFdKHR
+vkImportSemaphoreFdKHR
+vkGetFenceFdKHR
+vkImportFenceFdKHR
+vkCmdBindDescriptorSets2
+vkCmdPushConstants2
+vkCmdPushDescriptorSet2

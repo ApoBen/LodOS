@@ -753,6 +753,97 @@ static VKAPI_ATTR VkResult VKAPI_CALL icd_vkGetMemoryFdPropertiesKHR(
     return r;
 }
 
+/* T041: external semaphore/fence fds. Export: server sends host fd (tag 'F') after a successful RPC;
+ * wire fd value -1 means host returned no fd (already-signaled SYNC_FD). Import: client sends the fd
+ * (tag 'S' semaphore, 'G' fence) before the RPC; on success the import owns it, so close our copy. */
+static VkResult icd_recv_export_fd(vkbc *c, VkResult r, int wire_fd, int *pFd) {
+    if (r != VK_SUCCESS) return r;
+    if (wire_fd < 0) { *pFd = -1; return r; }
+    int fd = vkbc_recv_fd(c, 'F');
+    if (fd < 0) return VK_ERROR_OUT_OF_HOST_MEMORY;
+    *pFd = fd;
+    return r;
+}
+
+static VKAPI_ATTR VkResult VKAPI_CALL icd_vkGetSemaphoreFdKHR(
+    VkDevice device, const VkSemaphoreGetFdInfoKHR *pGetFdInfo, int *pFd) {
+    if (!pGetFdInfo || !pFd) return VK_ERROR_INITIALIZATION_FAILED;
+    int wire_fd = -1;
+    pthread_mutex_lock(&g_mu);
+    vkbc *c = icd_conn_locked();
+    VkResult r = c ? vkbc_vkGetSemaphoreFdKHR(c, DEV_RAW(device), pGetFdInfo, &wire_fd) : VK_ERROR_DEVICE_LOST;
+    if (c) r = icd_recv_export_fd(c, r, wire_fd, pFd);
+    pthread_mutex_unlock(&g_mu);
+    return r;
+}
+
+static VKAPI_ATTR VkResult VKAPI_CALL icd_vkGetFenceFdKHR(
+    VkDevice device, const VkFenceGetFdInfoKHR *pGetFdInfo, int *pFd) {
+    if (!pGetFdInfo || !pFd) return VK_ERROR_INITIALIZATION_FAILED;
+    int wire_fd = -1;
+    pthread_mutex_lock(&g_mu);
+    vkbc *c = icd_conn_locked();
+    VkResult r = c ? vkbc_vkGetFenceFdKHR(c, DEV_RAW(device), pGetFdInfo, &wire_fd) : VK_ERROR_DEVICE_LOST;
+    if (c) r = icd_recv_export_fd(c, r, wire_fd, pFd);
+    pthread_mutex_unlock(&g_mu);
+    return r;
+}
+
+static VKAPI_ATTR VkResult VKAPI_CALL icd_vkImportSemaphoreFdKHR(
+    VkDevice device, const VkImportSemaphoreFdInfoKHR *pImportSemaphoreFdInfo) {
+    if (!pImportSemaphoreFdInfo) return VK_ERROR_INITIALIZATION_FAILED;
+    int fd = pImportSemaphoreFdInfo->fd;
+    pthread_mutex_lock(&g_mu);
+    vkbc *c = icd_conn_locked();
+    VkResult r = VK_ERROR_DEVICE_LOST;
+    if (c) {
+        if (fd >= 0 && vkbc_send_fd(c, 'S', fd) < 0) {
+            r = VK_ERROR_INVALID_EXTERNAL_HANDLE;
+        } else {
+            r = vkbc_vkImportSemaphoreFdKHR(c, DEV_RAW(device), pImportSemaphoreFdInfo);
+            if (r == VK_SUCCESS && fd >= 0) close(fd);
+        }
+    }
+    pthread_mutex_unlock(&g_mu);
+    return r;
+}
+
+static VKAPI_ATTR VkResult VKAPI_CALL icd_vkImportFenceFdKHR(
+    VkDevice device, const VkImportFenceFdInfoKHR *pImportFenceFdInfo) {
+    if (!pImportFenceFdInfo) return VK_ERROR_INITIALIZATION_FAILED;
+    int fd = pImportFenceFdInfo->fd;
+    pthread_mutex_lock(&g_mu);
+    vkbc *c = icd_conn_locked();
+    VkResult r = VK_ERROR_DEVICE_LOST;
+    if (c) {
+        if (fd >= 0 && vkbc_send_fd(c, 'G', fd) < 0) {
+            r = VK_ERROR_INVALID_EXTERNAL_HANDLE;
+        } else {
+            r = vkbc_vkImportFenceFdKHR(c, DEV_RAW(device), pImportFenceFdInfo);
+            if (r == VK_SUCCESS && fd >= 0) close(fd);
+        }
+    }
+    pthread_mutex_unlock(&g_mu);
+    return r;
+}
+
+/* T041: VK 1.4 / VK_KHR_map_memory2 on top of the v1 memfd-shadow map path (placed maps unsupported). */
+static VKAPI_ATTR VkResult VKAPI_CALL icd_vkMapMemory2(
+    VkDevice device, const VkMemoryMapInfo *pMemoryMapInfo, void **ppData) {
+    if (!pMemoryMapInfo || !ppData) return VK_ERROR_INITIALIZATION_FAILED;
+    if (pMemoryMapInfo->flags & VK_MEMORY_MAP_PLACED_BIT_EXT) return VK_ERROR_MEMORY_MAP_FAILED;
+    ICD_CALL_RES(vkbc_vkMapMemory(c_, DEV_RAW(device), pMemoryMapInfo->memory, pMemoryMapInfo->offset,
+                                  pMemoryMapInfo->size, pMemoryMapInfo->flags, ppData));
+}
+
+static VKAPI_ATTR VkResult VKAPI_CALL icd_vkUnmapMemory2(
+    VkDevice device, const VkMemoryUnmapInfo *pMemoryUnmapInfo) {
+    if (!pMemoryUnmapInfo) return VK_ERROR_INITIALIZATION_FAILED;
+    if (!pMemoryUnmapInfo->memory) return VK_SUCCESS;
+    ICD_CALL_VOID(vkbc_vkUnmapMemory(c_, DEV_RAW(device), pMemoryUnmapInfo->memory));
+    return VK_SUCCESS;
+}
+
 static VKAPI_ATTR void VKAPI_CALL icd_vkDestroyCommandPool(
     VkDevice device, VkCommandPool commandPool, const VkAllocationCallbacks *pAllocator) {
     if (!commandPool) return;
@@ -1019,6 +1110,13 @@ static VKAPI_ATTR void VKAPI_CALL icd_vkCmdPushDescriptorSetWithTemplate(
     const icd_desc_template *t = (const icd_desc_template *)(uintptr_t)descriptorUpdateTemplate;
     icd_apply_desc_template(VK_NULL_HANDLE, commandBuffer, t, VK_NULL_HANDLE,
                             layout ? layout : (t ? t->layout : VK_NULL_HANDLE), set, pData);
+}
+
+static VKAPI_ATTR void VKAPI_CALL icd_vkCmdPushDescriptorSetWithTemplate2(
+    VkCommandBuffer commandBuffer, const VkPushDescriptorSetWithTemplateInfo *pInfo) {
+    if (!pInfo) return;
+    icd_vkCmdPushDescriptorSetWithTemplate(commandBuffer, pInfo->descriptorUpdateTemplate,
+                                           pInfo->layout, pInfo->set, pInfo->pData);
 }
 
 /* ---- ProcAddr tables & generated ICD thunks ---- */

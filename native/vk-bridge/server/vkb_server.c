@@ -370,6 +370,83 @@ static VKAPI_ATTR VkResult VKAPI_CALL srv_wrap_vkGetMemoryFdPropertiesKHR(
 }
 #endif
 
+/* T041: external semaphore/fence fds over SCM_RIGHTS (see icd.c). */
+static __attribute__((unused)) int srv_send_export_fd(client *c, int host_fd, int *pFd) {
+    if (host_fd < 0) { *pFd = -1; return 0; } /* e.g. already-signaled SYNC_FD */
+    char tag = 'F';
+    ssize_t sn = sock_send(c->sock, &tag, 1, &host_fd, 1);
+    close(host_fd);
+    if (sn != 1) return -1;
+    *pFd = 0;
+    return 0;
+}
+
+static __attribute__((unused)) int srv_recv_import_fd(client *c, char want) {
+    char tag = 0; int fds[SOCK_MAX_FDS], nf = 0;
+    ssize_t sn = sock_recv(c->sock, &tag, 1, fds, &nf);
+    if (sn != 1 || tag != want || nf != 1) {
+        for (int i = 0; i < nf; i++) close(fds[i]);
+        return -1;
+    }
+    return fds[0];
+}
+
+#ifdef VKB_HAS_vkGetSemaphoreFdKHR
+static VKAPI_ATTR VkResult VKAPI_CALL srv_wrap_vkGetSemaphoreFdKHR(
+    VkDevice dev, const VkSemaphoreGetFdInfoKHR *pGetFdInfo, int *pFd) {
+    client *c = t_cli;
+    if (!c || !pFd) return VK_ERROR_INITIALIZATION_FAILED;
+    int host_fd = -1;
+    VkResult r = g_real_fns.vkGetSemaphoreFdKHR(dev, pGetFdInfo, &host_fd);
+    if (r == VK_SUCCESS && srv_send_export_fd(c, host_fd, pFd) < 0) return VK_ERROR_OUT_OF_HOST_MEMORY;
+    return r;
+}
+#endif
+
+#ifdef VKB_HAS_vkGetFenceFdKHR
+static VKAPI_ATTR VkResult VKAPI_CALL srv_wrap_vkGetFenceFdKHR(
+    VkDevice dev, const VkFenceGetFdInfoKHR *pGetFdInfo, int *pFd) {
+    client *c = t_cli;
+    if (!c || !pFd) return VK_ERROR_INITIALIZATION_FAILED;
+    int host_fd = -1;
+    VkResult r = g_real_fns.vkGetFenceFdKHR(dev, pGetFdInfo, &host_fd);
+    if (r == VK_SUCCESS && srv_send_export_fd(c, host_fd, pFd) < 0) return VK_ERROR_OUT_OF_HOST_MEMORY;
+    return r;
+}
+#endif
+
+#ifdef VKB_HAS_vkImportSemaphoreFdKHR
+static VKAPI_ATTR VkResult VKAPI_CALL srv_wrap_vkImportSemaphoreFdKHR(
+    VkDevice dev, const VkImportSemaphoreFdInfoKHR *pInfo) {
+    client *c = t_cli;
+    if (!c || !pInfo) return VK_ERROR_INITIALIZATION_FAILED;
+    int fd = -1;
+    if (pInfo->fd >= 0) {
+        if ((fd = srv_recv_import_fd(c, 'S')) < 0) return VK_ERROR_INVALID_EXTERNAL_HANDLE;
+        ((VkImportSemaphoreFdInfoKHR *)(uintptr_t)pInfo)->fd = fd;
+    }
+    VkResult r = g_real_fns.vkImportSemaphoreFdKHR(dev, pInfo);
+    if (r != VK_SUCCESS && fd >= 0) close(fd);
+    return r;
+}
+#endif
+
+#ifdef VKB_HAS_vkImportFenceFdKHR
+static VKAPI_ATTR VkResult VKAPI_CALL srv_wrap_vkImportFenceFdKHR(
+    VkDevice dev, const VkImportFenceFdInfoKHR *pInfo) {
+    client *c = t_cli;
+    if (!c || !pInfo) return VK_ERROR_INITIALIZATION_FAILED;
+    int fd = -1;
+    if (pInfo->fd >= 0) {
+        if ((fd = srv_recv_import_fd(c, 'G')) < 0) return VK_ERROR_INVALID_EXTERNAL_HANDLE;
+        ((VkImportFenceFdInfoKHR *)(uintptr_t)pInfo)->fd = fd;
+    }
+    VkResult r = g_real_fns.vkImportFenceFdKHR(dev, pInfo);
+    if (r != VK_SUCCESS && fd >= 0) close(fd);
+    return r;
+}
+#endif
+
 #ifdef VKB_HAS_vkGetEventStatus
 static VKAPI_ATTR VkResult VKAPI_CALL srv_wrap_vkGetEventStatus(VkDevice dev, VkEvent event) {
     VkResult r = g_real_fns.vkGetEventStatus(dev, event);
@@ -514,6 +591,18 @@ static void srv_install_wrappers(void) {
 #endif
 #ifdef VKB_HAS_vkGetMemoryFdKHR
     if (g_real_fns.vkGetMemoryFdKHR) tmp.vkGetMemoryFdKHR = srv_wrap_vkGetMemoryFdKHR;
+#endif
+#ifdef VKB_HAS_vkGetSemaphoreFdKHR
+    if (g_real_fns.vkGetSemaphoreFdKHR) tmp.vkGetSemaphoreFdKHR = srv_wrap_vkGetSemaphoreFdKHR;
+#endif
+#ifdef VKB_HAS_vkGetFenceFdKHR
+    if (g_real_fns.vkGetFenceFdKHR) tmp.vkGetFenceFdKHR = srv_wrap_vkGetFenceFdKHR;
+#endif
+#ifdef VKB_HAS_vkImportSemaphoreFdKHR
+    if (g_real_fns.vkImportSemaphoreFdKHR) tmp.vkImportSemaphoreFdKHR = srv_wrap_vkImportSemaphoreFdKHR;
+#endif
+#ifdef VKB_HAS_vkImportFenceFdKHR
+    if (g_real_fns.vkImportFenceFdKHR) tmp.vkImportFenceFdKHR = srv_wrap_vkImportFenceFdKHR;
 #endif
 #ifdef VKB_HAS_vkGetMemoryFdPropertiesKHR
     if (g_real_fns.vkGetMemoryFdPropertiesKHR) tmp.vkGetMemoryFdPropertiesKHR = srv_wrap_vkGetMemoryFdPropertiesKHR;

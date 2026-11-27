@@ -886,12 +886,23 @@ CUSTOM_ICD_CMDS = {
     'vkDestroyDescriptorUpdateTemplate',
     'vkUpdateDescriptorSetWithTemplate',
     'vkCmdPushDescriptorSetWithTemplate',
+    # T041: sync fds passed via SCM_RIGHTS (icd.c + vkb_server.c wrappers); VK1.4 map2 over memfd shadow
+    'vkGetSemaphoreFdKHR',
+    'vkImportSemaphoreFdKHR',
+    'vkGetFenceFdKHR',
+    'vkImportFenceFdKHR',
+    'vkMapMemory2',
+    'vkUnmapMemory2',
+    'vkCmdPushDescriptorSetWithTemplate2',
 }
 
+# ICD-only cmds implemented on top of other bridged cmds (not on the wire)
+ICD_ONLY_EXTRA = ('vkCreateDescriptorUpdateTemplate', 'vkDestroyDescriptorUpdateTemplate',
+                  'vkUpdateDescriptorSetWithTemplate', 'vkCmdPushDescriptorSetWithTemplate',
+                  'vkMapMemory2', 'vkUnmapMemory2', 'vkCmdPushDescriptorSetWithTemplate2')
+
 DENY_DEV_EXTS = {
-    # Unbridged external sync FDs / host pointers / DRM modifiers
-    'VK_KHR_external_semaphore_fd',
-    'VK_KHR_external_fence_fd',
+    # Unbridged host pointers / DRM modifiers
     'VK_EXT_external_memory_host',
     'VK_EXT_external_memory_acquire_unmodified',
     'VK_EXT_queue_family_foreign',
@@ -912,8 +923,7 @@ DENY_DEV_EXTS = {
     'VK_EXT_display_control',
     'VK_EXT_hdr_metadata',
     'VK_GOOGLE_display_timing',
-    # Memory map v2 / placed map (shadow memfd hooks vkMapMemory/vkUnmapMemory)
-    'VK_KHR_map_memory2',
+    # Placed map (shadow memfd cannot honor a fixed guest address)
     'VK_EXT_map_memory_placed',
     # Callbacks / pipeline libraries / descriptor buffer
     'VK_EXT_device_memory_report',
@@ -936,6 +946,10 @@ def emit_icd_inc(R, ok, cmds, in_roots, in_pnext_set, out, hdr):
                       'vkUpdateDescriptorSetWithTemplate'}
     if 'vkCmdPushDescriptorSet' in ok_set:
         icd_avail.add('vkCmdPushDescriptorSetWithTemplate')
+    if 'vkMapMemory' in cmds and 'vkUnmapMemory' in ok_set:
+        icd_avail |= {'vkMapMemory2', 'vkUnmapMemory2'}
+    if 'vkCmdPushDescriptorSet' in ok_set:
+        icd_avail.add('vkCmdPushDescriptorSetWithTemplate2')
 
     base_active = {
         'VK_VERSION_1_0', 'VK_VERSION_1_1', 'VK_VERSION_1_2', 'VK_VERSION_1_3',
@@ -1049,9 +1063,7 @@ def emit_icd_inc(R, ok, cmds, in_roots, in_pnext_set, out, hdr):
 
     ic.append('static const proc_ent k_dev_procs[] = {')
     ic.append('    ENT("vkGetDeviceProcAddr", icd_vkGetDeviceProcAddr),')
-    ordered_dev = list(cmds) + [x for x in ('vkCreateDescriptorUpdateTemplate', 'vkDestroyDescriptorUpdateTemplate',
-                                            'vkUpdateDescriptorSetWithTemplate', 'vkCmdPushDescriptorSetWithTemplate')
-                                if x not in cmds]
+    ordered_dev = list(cmds) + [x for x in ICD_ONLY_EXTRA if x not in cmds]
     for c in ordered_dev:
         if c in icd_avail and R.cmds.get(c) and R.res(R.cmds[c][0].base) in ('VkDevice', 'VkQueue', 'VkCommandBuffer'):
             add_ent_with_aliases(ic, c)
