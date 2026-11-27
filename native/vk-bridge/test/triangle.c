@@ -1,6 +1,6 @@
 /* T032 PC-host offscreen triangle client via Khronos Vulkan Loader -> libvulkan_lodos.so -> vk-bridge -> host ICD.
- * Renders a red triangle on a cleared black 256x256 RGBA8 color attachment, copies to a host-visible buffer,
- * maps + invalidates, verifies center pixel red and corner pixels black, and writes out.ppm. */
+ * Renders a red triangle on a cleared blue 256x256 RGBA8 color attachment, copies to a host-visible buffer,
+ * maps + invalidates, verifies center pixel red and corner pixels blue, and writes out.ppm. */
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -588,7 +588,7 @@ int main(int argc, char **argv) {
     };
     VK(p_vkBeginCommandBuffer(cb, &cb_bi));
 
-    VkClearValue clear_val = { .color = { .float32 = { 0.0f, 0.0f, 0.0f, 1.0f } } };
+    VkClearValue clear_val = { .color = { .float32 = { 0.0f, 0.0f, 1.0f, 1.0f } } };
     VkRenderPassBeginInfo rp_bi = {
         .sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO,
         .renderPass = rp,

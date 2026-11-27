@@ -2,7 +2,12 @@ package org.lodos.app.setup
 
 import android.app.Activity
 import android.content.Intent
+import android.content.ComponentName
+import android.content.ServiceConnection
+import android.content.pm.PackageManager
+import android.os.Build
 import android.os.Bundle
+import android.os.IBinder
 import android.view.View
 import android.widget.Button
 import android.widget.LinearLayout
@@ -12,6 +17,10 @@ import org.lodos.app.DisplayActivity
 import org.lodos.app.MainActivity
 import org.lodos.app.R
 import org.lodos.app.bugreport.BugReportCollector
+import org.lodos.app.session.GuestSessionService
+import org.lodos.app.session.SessionController
+import org.lodos.app.session.SessionState
+import org.lodos.app.session.SessionUiModel
 import java.io.File
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
@@ -32,6 +41,30 @@ class SetupActivity : Activity() {
     private lateinit var nativeInfoButton: Button
     private lateinit var backButton: Button
     private lateinit var primaryButton: Button
+    private lateinit var sessionStatusView: TextView
+    private lateinit var sessionStartButton: Button
+    private lateinit var sessionStopButton: Button
+
+    private var bound = false
+    private var pendingSessionStart = false
+    private var sessionController: SessionController? = null
+    private val sessionListener: (SessionState) -> Unit = { state ->
+        runOnUiThread { if (!isFinishing && !isDestroyed) renderSession(state) }
+    }
+    private val sessionConnection = object : ServiceConnection {
+        override fun onServiceConnected(name: ComponentName, service: IBinder) {
+            val controller = (service as GuestSessionService.LocalBinder).controller
+            sessionController = controller
+            controller.addListener(sessionListener)
+            renderSession(controller.state)
+        }
+
+        override fun onServiceDisconnected(name: ComponentName) {
+            sessionController?.removeListener(sessionListener)
+            sessionController = null
+            renderSession(SessionState.Stopped)
+        }
+    }
 
     private lateinit var repo: RootfsRepo
     private lateinit var machine: SetupStateMachine
@@ -61,6 +94,9 @@ class SetupActivity : Activity() {
         nativeInfoButton = findViewById(R.id.setup_btn_native_info)
         backButton = findViewById(R.id.setup_btn_back)
         primaryButton = findViewById(R.id.setup_btn_primary)
+        sessionStatusView = findViewById(R.id.setup_session_status)
+        sessionStartButton = findViewById(R.id.setup_btn_session_start)
+        sessionStopButton = findViewById(R.id.setup_btn_session_stop)
 
         val onDiskReady = isRootfsPresentOnDisk()
         repo = FakeRootfsRepo(
@@ -92,6 +128,8 @@ class SetupActivity : Activity() {
         nativeInfoButton.setOnClickListener {
             startActivity(Intent(this, MainActivity::class.java))
         }
+        sessionStartButton.setOnClickListener { startGuestSession() }
+        sessionStopButton.setOnClickListener { GuestSessionService.stop(this) }
 
         machine.addListener(stateListener)
     }
@@ -101,6 +139,51 @@ class SetupActivity : Activity() {
         machine.removeListener(stateListener)
         installer.cancel()
         worker.shutdownNow()
+    }
+
+    override fun onStart() {
+        super.onStart()
+        bound = bindService(Intent(this, GuestSessionService::class.java), sessionConnection, BIND_AUTO_CREATE)
+    }
+
+    override fun onStop() {
+        sessionController?.removeListener(sessionListener)
+        sessionController = null
+        if (bound) {
+            unbindService(sessionConnection)
+            bound = false
+        }
+        super.onStop()
+    }
+
+    private fun startGuestSession() {
+        if (Build.VERSION.SDK_INT >= 33 &&
+            checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+        ) {
+            pendingSessionStart = true
+            requestPermissions(arrayOf(android.Manifest.permission.POST_NOTIFICATIONS), REQUEST_NOTIFICATIONS)
+            return
+        }
+        GuestSessionService.start(this)
+    }
+
+    @Deprecated("Deprecated by Android; permission result is still delivered for this Activity API")
+    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode == REQUEST_NOTIFICATIONS && pendingSessionStart) {
+            pendingSessionStart = false
+            // Start either way: Android permits foreground services when this permission is denied.
+            GuestSessionService.start(this)
+        }
+    }
+
+    private fun renderSession(state: SessionState) {
+        val ui = SessionUiModel.from(state)
+        sessionStatusView.text = "Session: ${ui.status}"
+        sessionStartButton.text = ui.startLabel
+        sessionStartButton.isEnabled = ui.startEnabled
+        sessionStopButton.text = ui.stopLabel
+        sessionStopButton.isEnabled = ui.stopEnabled
     }
 
     private fun onPrimaryAction(state: SetupState) {
@@ -199,6 +282,7 @@ class SetupActivity : Activity() {
     }
 
     companion object {
+        private const val REQUEST_NOTIFICATIONS = 5201
         private const val PREFS_NAME = "lodos_setup"
         private val DEFAULT_ROOTFS_SPEC = RootfsSpec(
             url = "https://images.linuxcontainers.org/images/debian/trixie/arm64/default/rootfs.tar.xz",

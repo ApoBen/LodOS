@@ -8,4 +8,6 @@
 - Bugreport: only newest guest-*.log, last 2000 lines, redacted (`BugReport.selectLogs/tailLines`).
 - Controller is pure Kotlin (ProcessRunner + Clock injected) -> 16 JVM tests, no phone.
 - Open: SIGTERM hits proot, not lodos-init directly; whether proot forwards it to the tracee (graceful systemd-style shutdown) is untested on phone.
-- Open: POST_NOTIFICATIONS runtime request not wired (API33+ notification hidden until granted; FGS still runs). No UI caller yet.
+- SetupActivity exposes Start/Stop controls and observes the bound GuestSessionService controller state.
+- Android 13+ asks for POST_NOTIFICATIONS before starting; the session proceeds if permission is denied.
+- SessionUiModel maps all lifecycle states into status text and enabled actions with JVM coverage.
