@@ -117,6 +117,11 @@ static void *getproc(const char *name, void *ud) {
     VkInstance inst = (VkInstance)ud;
     void *p = inst ? NULL : dlsym(g_lib, name);
     if (!p && g_gipa) p = (void *)g_gipa(inst, name);
+    if (!p && g_gipa && inst) {
+        char khr[96];
+        int n = snprintf(khr, sizeof khr, "%sKHR", name);
+        if (n > 0 && (size_t)n < sizeof khr) p = (void *)g_gipa(inst, khr);
+    }
     return p;
 }
 

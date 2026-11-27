@@ -30,19 +30,90 @@ def api_ok(e):
     return a is None or 'vulkan' in a.split(',')
 
 
+_LEN_ARITH_RE = re.compile(r'^[0-9A-Za-z_+\-*/() \t]+$')
+_IDENT_RE = re.compile(r'\b([A-Za-z_]\w*)\b')
+
+
+def len_refs(ln0):
+    if ln0 == 'null-terminated':
+        return []
+    if '->' in ln0:
+        return [ln0.split('->', 1)[0]]
+    return [m for m in _IDENT_RE.findall(ln0) if not m.startswith('VK_')]
+
+
 def ok_len_expr(s):
-    return s in ('null-terminated', 'codeSize / 4') or bool(re.match(r'^[A-Za-z_]\w*(->[A-Za-z_]\w*)?$', s))
+    if s == 'null-terminated' or re.match(r'^[A-Za-z_]\w*->[A-Za-z_]\w*$', s):
+        return True
+    return bool(_LEN_ARITH_RE.match(s))
 
 
 def eval_len_expr(ln0, acc, isptr=None):
-    if ln0 == 'codeSize / 4':
-        return '((%s) / 4)' % acc('codeSize')
     if '->' in ln0:
         p, m = ln0.split('->', 1)
         return '((%s) ? (%s)->%s : 0)' % (acc(p), acc(p), m)
-    if isptr and isptr.get(ln0):
-        return '((%s) ? *(%s) : 0)' % (acc(ln0), acc(ln0))
-    return acc(ln0)
+    if re.match(r'^[A-Za-z_]\w*$', ln0) and not ln0.startswith('VK_'):
+        if isptr and isptr.get(ln0):
+            return '((%s) ? *(%s) : 0)' % (acc(ln0), acc(ln0))
+        return acc(ln0)
+
+    def repl(mo):
+        nm = mo.group(1)
+        if nm.startswith('VK_'):
+            return nm
+        if isptr and isptr.get(nm):
+            return '((uint64_t)((%s) ? *(%s) : 0))' % (acc(nm), acc(nm))
+        return '((uint64_t)(%s))' % acc(nm)
+
+    return '(%s)' % _IDENT_RE.sub(repl, ln0)
+
+
+def stype_enum(reg, s):
+    ms = reg.structs.get(s, [])
+    if len(ms) >= 2 and ms[0].name == 'sType' and ms[1].name == 'pNext' and ms[0].values:
+        return ms[0].values.split(',')[0]
+    return None
+
+
+def discover_in_pnext(reg, g, exc_cls=None, roots=None):
+    """Discover core pure-input structextends transitively extending roots (default: g.used_structs)."""
+    if exc_cls is None:
+        exc_cls = Unsupported
+    in_exts = []
+    seen_st = set()
+    known = set(roots if roots is not None else g.used_structs)
+    changed = True
+    while changed:
+        changed = False
+        for s, exts in sorted(reg.structextends.items()):
+            if s in in_exts or s not in reg.core_types or reg.cat.get(s) != 'struct':
+                continue
+            if not (known & set(exts)):
+                continue
+            st = stype_enum(reg, s)
+            if not st or st in seen_st:
+                continue
+            ms = reg.structs[s]
+            ok_ext = True
+            snap = len(g.used_structs)
+            try:
+                for m in ms[2:]:
+                    if m.depth > 0 and not m.const_outer:
+                        ok_ext = False
+                        break
+                    g.classify(m, False)
+            except exc_cls:
+                ok_ext = False
+            if not ok_ext:
+                del g.used_structs[snap:]
+                continue
+            seen_st.add(st)
+            in_exts.append(s)
+            known.add(s)
+            for u in g.used_structs[snap:]:
+                known.add(u)
+            changed = True
+    return in_exts
 
 
 class Unsupported(Exception):
@@ -81,6 +152,12 @@ class Decl:
         self.values = e.get('values')
         # C type text (no name, no dims)
         self.ctype = ' '.join((pre + self.base + mid).split())
+        # C param `const T name[N]` decays to `const T* name` with fixed len N (e.g. vkCmdSetBlendConstants)
+        if e.tag == 'param' and self.depth == 0 and len(self.dims) == 1:
+            self.depth = 1
+            self.len = [self.dims[0]]
+            self.dims = []
+            self.ctype = self.ctype + '*'
 
 
 class Reg:
@@ -265,7 +342,7 @@ class Gen:
             return ['for (size_t %s = 0; %s < sizeof(%s) / sizeof((%s)[0]); %s++) {' % (i, i, ex, ex, i)] + \
                 ['    ' + x for x in self.enc_val(ek, base, '(%s)[%s]' % (ex, i))] + ['}']
         if k == 'pnext':
-            return ['assert((%s) == NULL && "vkb: pNext chains TODO");' % ex]
+            return ['n += vkb_enc_pnext(b ? b + n : NULL, (const void *)(%s));' % ex]
         if k == 'skip_alloc':
             return ['{ uint8_t p_ = (%s) != NULL; VKB_PUT(b, n, &p_, 1); } /* pAllocator: presence only */' % ex]
         if k == 'string':
@@ -317,9 +394,10 @@ class Gen:
             i = 'i%d' % self.u()
             return ['for (size_t %s = 0; %s < sizeof(%s) / sizeof((%s)[0]); %s++) {' % (i, i, lv, lv, i)] + \
                 ['    ' + x for x in self.dec_val(ek, base, '(%s)[%s]' % (lv, i))] + ['}']
-        if k == 'pnext' or k == 'skip_alloc':
-            pre = ['{ uint8_t p_; VKB_GET(b, n, &p_, 1); (void)p_; }'] if k == 'skip_alloc' else []
-            return pre + ['%s = NULL;' % lv]
+        if k == 'pnext':
+            return ['n += vkb_dec_pnext(b + n, a, (void **)&(%s));' % lv]
+        if k == 'skip_alloc':
+            return ['{ uint8_t p_; VKB_GET(b, n, &p_, 1); (void)p_; }', '%s = NULL;' % lv]
         if k == 'string':
             return self.dec_str(lv)
         if k == 'bytes':
@@ -374,18 +452,20 @@ class Gen:
         if k == 'string':
             return ['%s = vkb_fill_str(a, seed);' % lv], []
         if k == 'bytes':
-            return ['{ uint8_t *e_ = (uint8_t *)vkb_arena_alloc(a, %d);' % N_FILL,
-                    '  vkb_fill_bytes(e_, %d, seed);' % N_FILL,
+            nfill = N_FILL if len_refs(d.len[0]) else eval_len_expr(d.len[0], lambda nm: nm)
+            return ['{ uint8_t *e_ = (uint8_t *)vkb_arena_alloc(a, (size_t)%s);' % nfill,
+                    '  vkb_fill_bytes(e_, (size_t)%s, seed);' % nfill,
                     '  %s = (const void *)e_; }' % lv], setcnt(d.len[0])
         et = self.elem_ctype(d)
         if k == 'single':
             return ['{ %s *e_ = (%s *)vkb_arena_alloc(a, sizeof(%s));' % (et, et, et)] + \
                 ['  ' + x for x in self.fill_val(ek, base, '(*e_)')] + ['  %s = (void *)e_; }' % lv], []
         i = 'i%d' % self.u()
+        nfill = N_FILL if len_refs(d.len[0]) else eval_len_expr(d.len[0], lambda nm: nm)
         body = ['e_[%s] = vkb_fill_str(a, seed);' % i] if k == 'strarray' else \
             self.fill_val(ek, base, 'e_[%s]' % i)
-        return ['{ %s *e_ = (%s *)vkb_arena_alloc(a, %d * sizeof(%s));' % (et, et, N_FILL, et),
-                '  for (uint32_t %s = 0; %s < %d; %s++) {' % (i, i, N_FILL, i)] + \
+        return ['{ %s *e_ = (%s *)vkb_arena_alloc(a, (size_t)%s * sizeof(%s));' % (et, et, nfill, et),
+                '  for (uint32_t %s = 0; %s < (uint32_t)%s; %s++) {' % (i, i, nfill, i)] + \
             ['    ' + x for x in body] + ['  }', '  %s = (void *)e_; }' % lv], setcnt(d.len[0])
 
     def eq_val(self, k, base, x, y):
@@ -411,7 +491,9 @@ class Gen:
             i = 'i%d' % self.u()
             return ['for (size_t %s = 0; %s < sizeof(%s) / sizeof((%s)[0]); %s++) {' % (i, i, x, x, i)] + \
                 ['    ' + z for z in self.eq_val(ek, base, '(%s)[%s]' % (x, i), '(%s)[%s]' % (y, i))] + ['}']
-        if k in ('pnext', 'skip_alloc'):
+        if k == 'pnext':
+            return ['if (!vkb_eq_pnext((const void *)(%s), (const void *)(%s))) return 0;' % (x, y)]
+        if k == 'skip_alloc':
             return ['if ((%s) != NULL) return 0;' % y]
         if k == 'string':
             return self.eq_str(x, y)
@@ -448,6 +530,17 @@ def main():
             ok.append(c)
         except Unsupported as ex:
             bad[c] = str(ex)
+
+    in_pnext = discover_in_pnext(reg, g)
+
+    def set_len_lines(ln0, lval_fn, ctype_fn):
+        if not len_refs(ln0):
+            return []
+        dm = re.match(r'^\(?\s*([A-Za-z_]\w*)\s*(?:\+\s*(\d+)\s*)?\)?\s*/\s*(\d+)$', ln0)
+        if dm:
+            nm, div = dm.group(1), int(dm.group(3))
+            return ['%s = (%s)%d;' % (lval_fn(nm), ctype_fn(nm), div * N_FILL)]
+        return ['%s = (%s)%d;' % (lval_fn(ln0), ctype_fn(ln0), N_FILL)]
 
     hdr = '/* generated by native/vk-bridge/gen/gen.py from vk.xml - do not edit */\n'
 
@@ -497,6 +590,8 @@ def main():
          '    if (off + sz > a->cap) abort();',
          '    a->used = off + sz;',
          '    return a->base + off;', '}', '']
+    m.append('static size_t vkb_enc_pnext(uint8_t *b, const void *pnext);')
+    m.append('static size_t vkb_dec_pnext(const uint8_t *b, vkb_arena *a, void **out);')
     for s in g.used_structs:
         m.append('static size_t vkb_enc_%s(uint8_t *b, const %s *s);' % (s, s))
         m.append('static size_t vkb_dec_%s(const uint8_t *b, vkb_arena *a, %s *s);' % (s, s))
@@ -505,15 +600,70 @@ def main():
         mem = reg.structs[s]
         cnt = lambda ln0: eval_len_expr(ln0, lambda nm: 's->%s' % nm)
         m.append('static size_t vkb_enc_%s(uint8_t *b, const %s *s) {' % (s, s))
-        m.append('    size_t n = 0;')
+        m.append('    size_t n = 0; (void)b; (void)s;')
         for d in mem:
             m += ['    ' + x for x in g.enc(d, 's->%s' % d.name, cnt, False)]
         m += ['    return n;', '}', '']
         m.append('static size_t vkb_dec_%s(const uint8_t *b, vkb_arena *a, %s *s) {' % (s, s))
-        m.append('    size_t n = 0; (void)a;')
+        m.append('    size_t n = 0; (void)b; (void)a; (void)s;')
         for d in mem:
             m += ['    ' + x for x in g.dec(d, 's->%s' % d.name, False)]
         m += ['    return n;', '}', '']
+    for s in in_pnext:
+        mem = reg.structs[s][2:]
+        cnt = lambda ln0: eval_len_expr(ln0, lambda nm: 's->%s' % nm)
+        m.append('static size_t vkb_enc_pnext_%s(uint8_t *b, const %s *s) {' % (s, s))
+        m.append('    size_t n = 0; (void)b; (void)s;')
+        for d in mem:
+            m += ['    ' + x for x in g.enc(d, 's->%s' % d.name, cnt, False)]
+        m += ['    return n;', '}', '']
+        m.append('static size_t vkb_dec_pnext_%s(const uint8_t *b, vkb_arena *a, %s *s) {' % (s, s))
+        m.append('    size_t n = 0; (void)b; (void)a; (void)s;')
+        for d in mem:
+            m += ['    ' + x for x in g.dec(d, 's->%s' % d.name, False)]
+        m += ['    return n;', '}', '']
+    m += ['static size_t vkb_enc_pnext(uint8_t *b, const void *pnext) {',
+          '    size_t n = 0;',
+          '    uint8_t p_ = pnext != NULL;',
+          '    VKB_PUT(b, n, &p_, 1);',
+          '    if (!p_) return n;',
+          '    uint32_t cnt_ = 0;',
+          '    for (const VkBaseInStructure *c_ = (const VkBaseInStructure *)pnext; c_; c_ = c_->pNext) cnt_++;',
+          '    VKB_PUT(b, n, &cnt_, 4);',
+          '    for (const VkBaseInStructure *c_ = (const VkBaseInStructure *)pnext; c_; c_ = c_->pNext) {',
+          '        uint32_t st_ = (uint32_t)c_->sType;',
+          '        VKB_PUT(b, n, &st_, 4);',
+          '        switch ((int32_t)c_->sType) {']
+    for s in in_pnext:
+        m.append('        case %s: n += vkb_enc_pnext_%s(b ? b + n : NULL, (const %s *)c_); break;' %
+                 (stype_enum(reg, s), s, s))
+    m += ['        default: assert(0 && "vkb: unsupported pNext sType"); break;',
+          '        }',
+          '    }',
+          '    return n;', '}', '',
+          'static size_t vkb_dec_pnext(const uint8_t *b, vkb_arena *a, void **out) {',
+          '    size_t n = 0; (void)a;',
+          '    uint8_t p_; VKB_GET(b, n, &p_, 1);',
+          '    if (!p_) { *out = NULL; return n; }',
+          '    uint32_t cnt_; VKB_GET(b, n, &cnt_, 4);',
+          '    VkBaseOutStructure *head_ = NULL, *tail_ = NULL;',
+          '    for (uint32_t i_ = 0; i_ < cnt_; i_++) {',
+          '        uint32_t st_; VKB_GET(b, n, &st_, 4);',
+          '        VkBaseOutStructure *nd_ = NULL;',
+          '        switch ((int32_t)st_) {']
+    for s in in_pnext:
+        m.append('        case %s: { %s *t_ = (%s *)vkb_arena_alloc(a, sizeof(%s));'
+                 ' n += vkb_dec_pnext_%s(b + n, a, t_); nd_ = (VkBaseOutStructure *)t_; break; }' %
+                 (stype_enum(reg, s), s, s, s, s))
+    m += ['        default: abort();',
+          '        }',
+          '        nd_->sType = (VkStructureType)st_;',
+          '        nd_->pNext = NULL;',
+          '        if (tail_) tail_->pNext = nd_; else head_ = nd_;',
+          '        tail_ = nd_;',
+          '    }',
+          '    *out = head_;',
+          '    return n;', '}', '']
     for c in cmds:
         if c not in ok:
             m += ['/* %s: not generated (stub). reason: %s */' % (c, bad[c]), '']
@@ -534,27 +684,51 @@ def main():
     open(os.path.join(out, 'vkb_marshal.c'), 'w').write('\n'.join(m))
 
     # ---- vkb_test_gen.c (fill / deep-eq / roundtrip per cmd; included by test/roundtrip.c)
-    t = [hdr, '/* test helpers; expects vkb_fill_bytes, vkb_fill_str, vkb_streq defined by includer */', '']
+    t = [hdr, '/* test helpers; expects vkb_fill_bytes, vkb_fill_str, vkb_streq defined by includer */', '',
+         'static int vkb_eq_pnext(const void *x, const void *y);']
     for s in g.used_structs:
         t.append('static void fill_%s(%s *s, vkb_arena *a, uint32_t *seed);' % (s, s))
         t.append('static int eq_%s(const %s *x, const %s *y);' % (s, s, s))
     t.append('')
     for s in g.used_structs:
         mem = reg.structs[s]
+        mmap = {d.name: d for d in mem}
         t.append('static void fill_%s(%s *s, vkb_arena *a, uint32_t *seed) {' % (s, s))
-        t.append('    (void)a; (void)seed;')
+        t.append('    (void)a; (void)seed; (void)s;')
         post = []
-        setc_s = lambda ln0: ['s->codeSize = %d;' % (4 * N_FILL)] if ln0 == 'codeSize / 4' else ['s->%s = %d;' % (ln0, N_FILL)]
+        setc_s = lambda ln0, mmap=mmap: set_len_lines(ln0, lambda nm: 's->%s' % nm, lambda nm: mmap[nm].ctype)
         for d in mem:
             lines, pc = g.fill(d, 's->%s' % d.name, setc_s, False)
             t += ['    ' + x for x in lines]
             post += pc
         t += ['    ' + x for x in post] + ['}', '']
         t.append('static int eq_%s(const %s *x, const %s *y) {' % (s, s, s))
+        t.append('    (void)x; (void)y;')
         cnt_s = lambda ln0: eval_len_expr(ln0, lambda nm: 'x->%s' % nm)
         for d in mem:
             t += ['    ' + z for z in g.eq(d, 'x->%s' % d.name, 'y->%s' % d.name, cnt_s, False)]
         t += ['    return 1;', '}', '']
+    for s in in_pnext:
+        mem = reg.structs[s][2:]
+        t.append('static int eq_pnext_%s(const %s *x, const %s *y) {' % (s, s, s))
+        t.append('    (void)x; (void)y;')
+        cnt_s = lambda ln0: eval_len_expr(ln0, lambda nm: 'x->%s' % nm)
+        for d in mem:
+            t += ['    ' + z for z in g.eq(d, 'x->%s' % d.name, 'y->%s' % d.name, cnt_s, False)]
+        t += ['    return 1;', '}', '']
+    t += ['static int vkb_eq_pnext(const void *x, const void *y) {',
+          '    const VkBaseInStructure *cx = (const VkBaseInStructure *)x;',
+          '    const VkBaseInStructure *cy = (const VkBaseInStructure *)y;',
+          '    for (; cx || cy; cx = cx->pNext, cy = cy->pNext) {',
+          '        if (!cx || !cy || cx->sType != cy->sType) return 0;',
+          '        switch ((int32_t)cx->sType) {']
+    for s in in_pnext:
+        t.append('        case %s: if (!eq_pnext_%s((const %s *)cx, (const %s *)cy)) return 0; break;' %
+                 (stype_enum(reg, s), s, s, s))
+    t += ['        default: return 0;',
+          '        }',
+          '    }',
+          '    return 1;', '}', '']
     for c in ok:
         ps = reg.cmds[c]
         isptr = {p.name: p.depth > 0 for p in ps}
@@ -566,12 +740,14 @@ def main():
         post = []
 
         def setc_p(ln0, isptr=isptr, pmap=pmap):
-            if ln0 == 'codeSize / 4':
-                return ['x_codeSize = %d;' % (4 * N_FILL)]
             if '->' in ln0:
                 pnm, mnm = ln0.split('->', 1)
                 return ['((%s *)(uintptr_t)x_%s)->%s = %d;' % (reg.res(pmap[pnm].base), pnm, mnm, N_FILL)]
-            return [('*x_%s = %d;' if isptr.get(ln0) else 'x_%s = %d;') % (ln0, N_FILL)]
+            return set_len_lines(
+                ln0,
+                lambda nm: ('*x_%s' if isptr.get(nm) else 'x_%s') % nm,
+                lambda nm: reg.res(pmap[nm].base) if isptr.get(nm) else pmap[nm].ctype,
+            )
 
         for p in ps:
             lines, pc = g.fill(p, 'x_%s' % p.name, setc_p, True)

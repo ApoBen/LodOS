@@ -29,13 +29,28 @@ static int manual_create_instance(void) {
     vkb_arena da = { dec_mem, sizeof dec_mem, 0 };
     const char *layers[] = { "VK_LAYER_lodos" };
     const char *exts[] = { "VK_KHR_surface", "VK_KHR_xlib_surface" };
+    VkValidationFeatureEnableEXT en_feats[] = {
+        VK_VALIDATION_FEATURE_ENABLE_BEST_PRACTICES_EXT,
+        VK_VALIDATION_FEATURE_ENABLE_SYNCHRONIZATION_VALIDATION_EXT,
+    };
+    VkValidationFeaturesEXT vf = {
+        .sType = VK_STRUCTURE_TYPE_VALIDATION_FEATURES_EXT,
+        .pNext = NULL,
+        .enabledValidationFeatureCount = 2,
+        .pEnabledValidationFeatures = en_feats,
+    };
     VkApplicationInfo app = { VK_STRUCTURE_TYPE_APPLICATION_INFO, NULL, "LodOS", 7, "wine", 9, VK_API_VERSION_1_3 };
-    VkInstanceCreateInfo ci = { VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO, NULL, 0, &app, 1, layers, 2, exts };
+    VkInstanceCreateInfo ci = { VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO, &vf, 0, &app, 1, layers, 2, exts };
     VkInstance inst = (VkInstance)(uintptr_t)0x1122334455667788ull;
     size_t n = vkb_enc_vkCreateInstance(buf, &ci, NULL, &inst);
     const VkInstanceCreateInfo *dci; const VkAllocationCallbacks *dal; VkInstance *dinst;
     if (vkb_dec_vkCreateInstance(buf, &da, &dci, &dal, &dinst) != n) return 0;
-    return dal == NULL && dci->sType == VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO && dci->pNext == NULL &&
+    const VkValidationFeaturesEXT *dvf = (const VkValidationFeaturesEXT *)dci->pNext;
+    return dal == NULL && dci->sType == VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO &&
+           dvf != NULL && dvf->sType == VK_STRUCTURE_TYPE_VALIDATION_FEATURES_EXT && dvf->pNext == NULL &&
+           dvf->enabledValidationFeatureCount == 2 &&
+           dvf->pEnabledValidationFeatures[0] == VK_VALIDATION_FEATURE_ENABLE_BEST_PRACTICES_EXT &&
+           dvf->pEnabledValidationFeatures[1] == VK_VALIDATION_FEATURE_ENABLE_SYNCHRONIZATION_VALIDATION_EXT &&
            strcmp(dci->pApplicationInfo->pApplicationName, "LodOS") == 0 &&
            strcmp(dci->pApplicationInfo->pEngineName, "wine") == 0 &&
            dci->pApplicationInfo->apiVersion == VK_API_VERSION_1_3 &&

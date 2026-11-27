@@ -494,28 +494,12 @@ static VKAPI_ATTR VkResult VKAPI_CALL icd_vkCreateDevice(
     if (!pd || !pCreateInfo || !pDevice) return VK_ERROR_INITIALIZATION_FAILED;
 
     VkDeviceCreateInfo dci = *pCreateInfo;
-    /* Extract VkPhysicalDeviceFeatures2 if passed in pNext; strip guest loader VkLayerDeviceCreateInfo */
-    for (const VkBaseInStructure *s = (const VkBaseInStructure *)pCreateInfo->pNext; s; s = s->pNext) {
-        if (s->sType == VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2 && !dci.pEnabledFeatures)
-            dci.pEnabledFeatures = &((const VkPhysicalDeviceFeatures2 *)s)->features;
-    }
-    dci.pNext = NULL;
+    /* vkr_in_pnext_enc strips guest loader VkLayerDeviceCreateInfo while preserving feature chains */
     dci.enabledLayerCount = 0;
     dci.ppEnabledLayerNames = NULL;
 
-    VkDeviceQueueCreateInfo *qcis = NULL;
-    if (dci.queueCreateInfoCount > 0 && dci.pQueueCreateInfos) {
-        qcis = calloc(dci.queueCreateInfoCount, sizeof(*qcis));
-        if (!qcis) return VK_ERROR_OUT_OF_HOST_MEMORY;
-        for (uint32_t i = 0; i < dci.queueCreateInfoCount; i++) {
-            qcis[i] = dci.pQueueCreateInfos[i];
-            qcis[i].pNext = NULL;
-        }
-        dci.pQueueCreateInfos = qcis;
-    }
-
     icd_device *dev = calloc(1, sizeof(*dev));
-    if (!dev) { free(qcis); return VK_ERROR_OUT_OF_HOST_MEMORY; }
+    if (!dev) return VK_ERROR_OUT_OF_HOST_MEMORY;
     set_loader_magic_value(dev);
 
     VkDevice raw_dev = VK_NULL_HANDLE;
@@ -523,7 +507,6 @@ static VKAPI_ATTR VkResult VKAPI_CALL icd_vkCreateDevice(
     vkbc *c = icd_conn_locked();
     VkResult r = c ? vkbc_vkCreateDevice(c, PD_RAW(pd), &dci, pAllocator, &raw_dev) : VK_ERROR_DEVICE_LOST;
     pthread_mutex_unlock(&g_mu);
-    free(qcis);
     if (r != VK_SUCCESS) { free(dev); return r; }
 
     dev->id = (uint64_t)(uintptr_t)raw_dev;
@@ -605,7 +588,6 @@ static VKAPI_ATTR VkResult VKAPI_CALL icd_vkQueueSubmit(
         uint32_t off = 0;
         for (uint32_t i = 0; i < submitCount; i++) {
             subs[i] = pSubmits[i];
-            subs[i].pNext = NULL;
             if (subs[i].commandBufferCount > 0 && subs[i].pCommandBuffers) {
                 for (uint32_t j = 0; j < subs[i].commandBufferCount; j++)
                     cbs[off + j] = CMDBUF_RAW(subs[i].pCommandBuffers[j]);
@@ -633,10 +615,7 @@ static VKAPI_ATTR VkResult VKAPI_CALL icd_vkQueueWaitIdle(VkQueue queue) {
 static VKAPI_ATTR VkResult VKAPI_CALL icd_vkCreateFence(
     VkDevice device, const VkFenceCreateInfo *pCreateInfo,
     const VkAllocationCallbacks *pAllocator, VkFence *pFence) {
-    if (!pCreateInfo) return VK_ERROR_INITIALIZATION_FAILED;
-    VkFenceCreateInfo ci = *pCreateInfo;
-    ci.pNext = NULL;
-    ICD_CALL_RES(vkbc_vkCreateFence(c_, DEV_RAW(device), &ci, pAllocator, pFence));
+    ICD_CALL_RES(vkbc_vkCreateFence(c_, DEV_RAW(device), pCreateInfo, pAllocator, pFence));
 }
 
 static VKAPI_ATTR void VKAPI_CALL icd_vkDestroyFence(
@@ -662,10 +641,7 @@ static VKAPI_ATTR VkResult VKAPI_CALL icd_vkWaitForFences(
 static VKAPI_ATTR VkResult VKAPI_CALL icd_vkCreateSemaphore(
     VkDevice device, const VkSemaphoreCreateInfo *pCreateInfo,
     const VkAllocationCallbacks *pAllocator, VkSemaphore *pSemaphore) {
-    if (!pCreateInfo) return VK_ERROR_INITIALIZATION_FAILED;
-    VkSemaphoreCreateInfo ci = *pCreateInfo;
-    ci.pNext = NULL;
-    ICD_CALL_RES(vkbc_vkCreateSemaphore(c_, DEV_RAW(device), &ci, pAllocator, pSemaphore));
+    ICD_CALL_RES(vkbc_vkCreateSemaphore(c_, DEV_RAW(device), pCreateInfo, pAllocator, pSemaphore));
 }
 
 static VKAPI_ATTR void VKAPI_CALL icd_vkDestroySemaphore(
@@ -679,10 +655,7 @@ static VKAPI_ATTR void VKAPI_CALL icd_vkDestroySemaphore(
 static VKAPI_ATTR VkResult VKAPI_CALL icd_vkAllocateMemory(
     VkDevice device, const VkMemoryAllocateInfo *pAllocateInfo,
     const VkAllocationCallbacks *pAllocator, VkDeviceMemory *pMemory) {
-    if (!pAllocateInfo) return VK_ERROR_INITIALIZATION_FAILED;
-    VkMemoryAllocateInfo ai = *pAllocateInfo;
-    ai.pNext = NULL;
-    ICD_CALL_RES(vkbc_vkAllocateMemory(c_, DEV_RAW(device), &ai, pAllocator, pMemory));
+    ICD_CALL_RES(vkbc_vkAllocateMemory(c_, DEV_RAW(device), pAllocateInfo, pAllocator, pMemory));
 }
 
 static VKAPI_ATTR void VKAPI_CALL icd_vkFreeMemory(
@@ -722,10 +695,7 @@ static VKAPI_ATTR void VKAPI_CALL icd_vkGetDeviceMemoryCommitment(
 static VKAPI_ATTR VkResult VKAPI_CALL icd_vkCreateBuffer(
     VkDevice device, const VkBufferCreateInfo *pCreateInfo,
     const VkAllocationCallbacks *pAllocator, VkBuffer *pBuffer) {
-    if (!pCreateInfo) return VK_ERROR_INITIALIZATION_FAILED;
-    VkBufferCreateInfo bci = *pCreateInfo;
-    bci.pNext = NULL;
-    ICD_CALL_RES(vkbc_vkCreateBuffer(c_, DEV_RAW(device), &bci, pAllocator, pBuffer));
+    ICD_CALL_RES(vkbc_vkCreateBuffer(c_, DEV_RAW(device), pCreateInfo, pAllocator, pBuffer));
 }
 
 static VKAPI_ATTR void VKAPI_CALL icd_vkDestroyBuffer(
@@ -757,10 +727,7 @@ static VKAPI_ATTR VkResult VKAPI_CALL icd_vkBindBufferMemory2(
 static VKAPI_ATTR VkResult VKAPI_CALL icd_vkCreateImage(
     VkDevice device, const VkImageCreateInfo *pCreateInfo,
     const VkAllocationCallbacks *pAllocator, VkImage *pImage) {
-    if (!pCreateInfo) return VK_ERROR_INITIALIZATION_FAILED;
-    VkImageCreateInfo ici = *pCreateInfo;
-    ici.pNext = NULL;
-    ICD_CALL_RES(vkbc_vkCreateImage(c_, DEV_RAW(device), &ici, pAllocator, pImage));
+    ICD_CALL_RES(vkbc_vkCreateImage(c_, DEV_RAW(device), pCreateInfo, pAllocator, pImage));
 }
 
 static VKAPI_ATTR void VKAPI_CALL icd_vkDestroyImage(
@@ -789,15 +756,78 @@ static VKAPI_ATTR VkResult VKAPI_CALL icd_vkBindImageMemory2(
     ICD_CALL_RES(vkbc_vkBindImageMemory2(c_, DEV_RAW(device), bindInfoCount, pBindInfos));
 }
 
+static VKAPI_ATTR VkResult VKAPI_CALL icd_vkCreateImageView(
+    VkDevice device, const VkImageViewCreateInfo *pCreateInfo,
+    const VkAllocationCallbacks *pAllocator, VkImageView *pView) {
+    ICD_CALL_RES(vkbc_vkCreateImageView(c_, DEV_RAW(device), pCreateInfo, pAllocator, pView));
+}
+
+static VKAPI_ATTR void VKAPI_CALL icd_vkDestroyImageView(
+    VkDevice device, VkImageView imageView, const VkAllocationCallbacks *pAllocator) {
+    if (!imageView) return;
+    ICD_CALL_VOID(vkbc_vkDestroyImageView(c_, DEV_RAW(device), imageView, pAllocator));
+}
+
+static VKAPI_ATTR void VKAPI_CALL icd_vkGetImageSubresourceLayout(
+    VkDevice device, VkImage image, const VkImageSubresource *pSubresource, VkSubresourceLayout *pLayout) {
+    ICD_CALL_VOID(vkbc_vkGetImageSubresourceLayout(c_, DEV_RAW(device), image, pSubresource, pLayout));
+}
+
+static VKAPI_ATTR VkResult VKAPI_CALL icd_vkCreateSampler(
+    VkDevice device, const VkSamplerCreateInfo *pCreateInfo,
+    const VkAllocationCallbacks *pAllocator, VkSampler *pSampler) {
+    ICD_CALL_RES(vkbc_vkCreateSampler(c_, DEV_RAW(device), pCreateInfo, pAllocator, pSampler));
+}
+
+static VKAPI_ATTR void VKAPI_CALL icd_vkDestroySampler(
+    VkDevice device, VkSampler sampler, const VkAllocationCallbacks *pAllocator) {
+    if (!sampler) return;
+    ICD_CALL_VOID(vkbc_vkDestroySampler(c_, DEV_RAW(device), sampler, pAllocator));
+}
+
+/* ---- RenderPass & Framebuffer ---- */
+
+static VKAPI_ATTR VkResult VKAPI_CALL icd_vkCreateRenderPass(
+    VkDevice device, const VkRenderPassCreateInfo *pCreateInfo,
+    const VkAllocationCallbacks *pAllocator, VkRenderPass *pRenderPass) {
+    ICD_CALL_RES(vkbc_vkCreateRenderPass(c_, DEV_RAW(device), pCreateInfo, pAllocator, pRenderPass));
+}
+
+static VKAPI_ATTR VkResult VKAPI_CALL icd_vkCreateRenderPass2(
+    VkDevice device, const VkRenderPassCreateInfo2 *pCreateInfo,
+    const VkAllocationCallbacks *pAllocator, VkRenderPass *pRenderPass) {
+    ICD_CALL_RES(vkbc_vkCreateRenderPass2(c_, DEV_RAW(device), pCreateInfo, pAllocator, pRenderPass));
+}
+
+static VKAPI_ATTR void VKAPI_CALL icd_vkDestroyRenderPass(
+    VkDevice device, VkRenderPass renderPass, const VkAllocationCallbacks *pAllocator) {
+    if (!renderPass) return;
+    ICD_CALL_VOID(vkbc_vkDestroyRenderPass(c_, DEV_RAW(device), renderPass, pAllocator));
+}
+
+static VKAPI_ATTR void VKAPI_CALL icd_vkGetRenderAreaGranularity(
+    VkDevice device, VkRenderPass renderPass, VkExtent2D *pGranularity) {
+    ICD_CALL_VOID(vkbc_vkGetRenderAreaGranularity(c_, DEV_RAW(device), renderPass, pGranularity));
+}
+
+static VKAPI_ATTR VkResult VKAPI_CALL icd_vkCreateFramebuffer(
+    VkDevice device, const VkFramebufferCreateInfo *pCreateInfo,
+    const VkAllocationCallbacks *pAllocator, VkFramebuffer *pFramebuffer) {
+    ICD_CALL_RES(vkbc_vkCreateFramebuffer(c_, DEV_RAW(device), pCreateInfo, pAllocator, pFramebuffer));
+}
+
+static VKAPI_ATTR void VKAPI_CALL icd_vkDestroyFramebuffer(
+    VkDevice device, VkFramebuffer framebuffer, const VkAllocationCallbacks *pAllocator) {
+    if (!framebuffer) return;
+    ICD_CALL_VOID(vkbc_vkDestroyFramebuffer(c_, DEV_RAW(device), framebuffer, pAllocator));
+}
+
 /* ---- Shader, Descriptors, Pipelines ---- */
 
 static VKAPI_ATTR VkResult VKAPI_CALL icd_vkCreateShaderModule(
     VkDevice device, const VkShaderModuleCreateInfo *pCreateInfo,
     const VkAllocationCallbacks *pAllocator, VkShaderModule *pShaderModule) {
-    if (!pCreateInfo) return VK_ERROR_INITIALIZATION_FAILED;
-    VkShaderModuleCreateInfo ci = *pCreateInfo;
-    ci.pNext = NULL;
-    ICD_CALL_RES(vkbc_vkCreateShaderModule(c_, DEV_RAW(device), &ci, pAllocator, pShaderModule));
+    ICD_CALL_RES(vkbc_vkCreateShaderModule(c_, DEV_RAW(device), pCreateInfo, pAllocator, pShaderModule));
 }
 
 static VKAPI_ATTR void VKAPI_CALL icd_vkDestroyShaderModule(
@@ -809,10 +839,7 @@ static VKAPI_ATTR void VKAPI_CALL icd_vkDestroyShaderModule(
 static VKAPI_ATTR VkResult VKAPI_CALL icd_vkCreateDescriptorSetLayout(
     VkDevice device, const VkDescriptorSetLayoutCreateInfo *pCreateInfo,
     const VkAllocationCallbacks *pAllocator, VkDescriptorSetLayout *pSetLayout) {
-    if (!pCreateInfo) return VK_ERROR_INITIALIZATION_FAILED;
-    VkDescriptorSetLayoutCreateInfo ci = *pCreateInfo;
-    ci.pNext = NULL;
-    ICD_CALL_RES(vkbc_vkCreateDescriptorSetLayout(c_, DEV_RAW(device), &ci, pAllocator, pSetLayout));
+    ICD_CALL_RES(vkbc_vkCreateDescriptorSetLayout(c_, DEV_RAW(device), pCreateInfo, pAllocator, pSetLayout));
 }
 
 static VKAPI_ATTR void VKAPI_CALL icd_vkDestroyDescriptorSetLayout(
@@ -824,10 +851,7 @@ static VKAPI_ATTR void VKAPI_CALL icd_vkDestroyDescriptorSetLayout(
 static VKAPI_ATTR VkResult VKAPI_CALL icd_vkCreateDescriptorPool(
     VkDevice device, const VkDescriptorPoolCreateInfo *pCreateInfo,
     const VkAllocationCallbacks *pAllocator, VkDescriptorPool *pDescriptorPool) {
-    if (!pCreateInfo) return VK_ERROR_INITIALIZATION_FAILED;
-    VkDescriptorPoolCreateInfo ci = *pCreateInfo;
-    ci.pNext = NULL;
-    ICD_CALL_RES(vkbc_vkCreateDescriptorPool(c_, DEV_RAW(device), &ci, pAllocator, pDescriptorPool));
+    ICD_CALL_RES(vkbc_vkCreateDescriptorPool(c_, DEV_RAW(device), pCreateInfo, pAllocator, pDescriptorPool));
 }
 
 static VKAPI_ATTR void VKAPI_CALL icd_vkDestroyDescriptorPool(
@@ -843,10 +867,7 @@ static VKAPI_ATTR VkResult VKAPI_CALL icd_vkResetDescriptorPool(
 
 static VKAPI_ATTR VkResult VKAPI_CALL icd_vkAllocateDescriptorSets(
     VkDevice device, const VkDescriptorSetAllocateInfo *pAllocateInfo, VkDescriptorSet *pDescriptorSets) {
-    if (!pAllocateInfo) return VK_ERROR_INITIALIZATION_FAILED;
-    VkDescriptorSetAllocateInfo ai = *pAllocateInfo;
-    ai.pNext = NULL;
-    ICD_CALL_RES(vkbc_vkAllocateDescriptorSets(c_, DEV_RAW(device), &ai, pDescriptorSets));
+    ICD_CALL_RES(vkbc_vkAllocateDescriptorSets(c_, DEV_RAW(device), pAllocateInfo, pDescriptorSets));
 }
 
 static VKAPI_ATTR VkResult VKAPI_CALL icd_vkFreeDescriptorSets(
@@ -865,10 +886,7 @@ static VKAPI_ATTR void VKAPI_CALL icd_vkUpdateDescriptorSets(
 static VKAPI_ATTR VkResult VKAPI_CALL icd_vkCreatePipelineLayout(
     VkDevice device, const VkPipelineLayoutCreateInfo *pCreateInfo,
     const VkAllocationCallbacks *pAllocator, VkPipelineLayout *pPipelineLayout) {
-    if (!pCreateInfo) return VK_ERROR_INITIALIZATION_FAILED;
-    VkPipelineLayoutCreateInfo ci = *pCreateInfo;
-    ci.pNext = NULL;
-    ICD_CALL_RES(vkbc_vkCreatePipelineLayout(c_, DEV_RAW(device), &ci, pAllocator, pPipelineLayout));
+    ICD_CALL_RES(vkbc_vkCreatePipelineLayout(c_, DEV_RAW(device), pCreateInfo, pAllocator, pPipelineLayout));
 }
 
 static VKAPI_ATTR void VKAPI_CALL icd_vkDestroyPipelineLayout(
@@ -880,10 +898,7 @@ static VKAPI_ATTR void VKAPI_CALL icd_vkDestroyPipelineLayout(
 static VKAPI_ATTR VkResult VKAPI_CALL icd_vkCreatePipelineCache(
     VkDevice device, const VkPipelineCacheCreateInfo *pCreateInfo,
     const VkAllocationCallbacks *pAllocator, VkPipelineCache *pPipelineCache) {
-    if (!pCreateInfo) return VK_ERROR_INITIALIZATION_FAILED;
-    VkPipelineCacheCreateInfo ci = *pCreateInfo;
-    ci.pNext = NULL;
-    ICD_CALL_RES(vkbc_vkCreatePipelineCache(c_, DEV_RAW(device), &ci, pAllocator, pPipelineCache));
+    ICD_CALL_RES(vkbc_vkCreatePipelineCache(c_, DEV_RAW(device), pCreateInfo, pAllocator, pPipelineCache));
 }
 
 static VKAPI_ATTR void VKAPI_CALL icd_vkDestroyPipelineCache(
@@ -899,6 +914,13 @@ static VKAPI_ATTR VkResult VKAPI_CALL icd_vkCreateComputePipelines(
     ICD_CALL_RES(vkbc_vkCreateComputePipelines(c_, DEV_RAW(device), pipelineCache, createInfoCount, pCreateInfos, pAllocator, pPipelines));
 }
 
+static VKAPI_ATTR VkResult VKAPI_CALL icd_vkCreateGraphicsPipelines(
+    VkDevice device, VkPipelineCache pipelineCache, uint32_t createInfoCount,
+    const VkGraphicsPipelineCreateInfo *pCreateInfos,
+    const VkAllocationCallbacks *pAllocator, VkPipeline *pPipelines) {
+    ICD_CALL_RES(vkbc_vkCreateGraphicsPipelines(c_, DEV_RAW(device), pipelineCache, createInfoCount, pCreateInfos, pAllocator, pPipelines));
+}
+
 static VKAPI_ATTR void VKAPI_CALL icd_vkDestroyPipeline(
     VkDevice device, VkPipeline pipeline, const VkAllocationCallbacks *pAllocator) {
     if (!pipeline) return;
@@ -910,10 +932,7 @@ static VKAPI_ATTR void VKAPI_CALL icd_vkDestroyPipeline(
 static VKAPI_ATTR VkResult VKAPI_CALL icd_vkCreateCommandPool(
     VkDevice device, const VkCommandPoolCreateInfo *pCreateInfo,
     const VkAllocationCallbacks *pAllocator, VkCommandPool *pCommandPool) {
-    if (!pCreateInfo) return VK_ERROR_INITIALIZATION_FAILED;
-    VkCommandPoolCreateInfo ci = *pCreateInfo;
-    ci.pNext = NULL;
-    ICD_CALL_RES(vkbc_vkCreateCommandPool(c_, DEV_RAW(device), &ci, pAllocator, pCommandPool));
+    ICD_CALL_RES(vkbc_vkCreateCommandPool(c_, DEV_RAW(device), pCreateInfo, pAllocator, pCommandPool));
 }
 
 static VKAPI_ATTR void VKAPI_CALL icd_vkDestroyCommandPool(
@@ -999,10 +1018,7 @@ static VKAPI_ATTR void VKAPI_CALL icd_vkFreeCommandBuffers(
 
 static VKAPI_ATTR VkResult VKAPI_CALL icd_vkBeginCommandBuffer(
     VkCommandBuffer commandBuffer, const VkCommandBufferBeginInfo *pBeginInfo) {
-    if (!pBeginInfo) return VK_ERROR_INITIALIZATION_FAILED;
-    VkCommandBufferBeginInfo bi = *pBeginInfo;
-    bi.pNext = NULL;
-    ICD_CALL_RES(vkbc_vkBeginCommandBuffer(c_, CMDBUF_RAW(commandBuffer), &bi));
+    ICD_CALL_RES(vkbc_vkBeginCommandBuffer(c_, CMDBUF_RAW(commandBuffer), pBeginInfo));
 }
 
 static VKAPI_ATTR VkResult VKAPI_CALL icd_vkEndCommandBuffer(VkCommandBuffer commandBuffer) {
@@ -1078,6 +1094,174 @@ static VKAPI_ATTR void VKAPI_CALL icd_vkCmdFillBuffer(
 static VKAPI_ATTR void VKAPI_CALL icd_vkCmdUpdateBuffer(
     VkCommandBuffer commandBuffer, VkBuffer dstBuffer, VkDeviceSize dstOffset, VkDeviceSize dataSize, const void *pData) {
     ICD_CALL_VOID(vkbc_vkCmdUpdateBuffer(c_, CMDBUF_RAW(commandBuffer), dstBuffer, dstOffset, dataSize, pData));
+}
+
+/* ---- Recorded vkCmd* graphics, renderpass, dynamic state & image copy commands ---- */
+
+static VKAPI_ATTR void VKAPI_CALL icd_vkCmdBeginRenderPass(
+    VkCommandBuffer commandBuffer, const VkRenderPassBeginInfo *pRenderPassBegin, VkSubpassContents contents) {
+    ICD_CALL_VOID(vkbc_vkCmdBeginRenderPass(c_, CMDBUF_RAW(commandBuffer), pRenderPassBegin, contents));
+}
+
+static VKAPI_ATTR void VKAPI_CALL icd_vkCmdNextSubpass(
+    VkCommandBuffer commandBuffer, VkSubpassContents contents) {
+    ICD_CALL_VOID(vkbc_vkCmdNextSubpass(c_, CMDBUF_RAW(commandBuffer), contents));
+}
+
+static VKAPI_ATTR void VKAPI_CALL icd_vkCmdEndRenderPass(VkCommandBuffer commandBuffer) {
+    ICD_CALL_VOID(vkbc_vkCmdEndRenderPass(c_, CMDBUF_RAW(commandBuffer)));
+}
+
+static VKAPI_ATTR void VKAPI_CALL icd_vkCmdBeginRenderPass2(
+    VkCommandBuffer commandBuffer, const VkRenderPassBeginInfo *pRenderPassBegin,
+    const VkSubpassBeginInfo *pSubpassBeginInfo) {
+    ICD_CALL_VOID(vkbc_vkCmdBeginRenderPass2(c_, CMDBUF_RAW(commandBuffer), pRenderPassBegin, pSubpassBeginInfo));
+}
+
+static VKAPI_ATTR void VKAPI_CALL icd_vkCmdNextSubpass2(
+    VkCommandBuffer commandBuffer, const VkSubpassBeginInfo *pSubpassBeginInfo,
+    const VkSubpassEndInfo *pSubpassEndInfo) {
+    ICD_CALL_VOID(vkbc_vkCmdNextSubpass2(c_, CMDBUF_RAW(commandBuffer), pSubpassBeginInfo, pSubpassEndInfo));
+}
+
+static VKAPI_ATTR void VKAPI_CALL icd_vkCmdEndRenderPass2(
+    VkCommandBuffer commandBuffer, const VkSubpassEndInfo *pSubpassEndInfo) {
+    ICD_CALL_VOID(vkbc_vkCmdEndRenderPass2(c_, CMDBUF_RAW(commandBuffer), pSubpassEndInfo));
+}
+
+static VKAPI_ATTR void VKAPI_CALL icd_vkCmdBeginRendering(
+    VkCommandBuffer commandBuffer, const VkRenderingInfo *pRenderingInfo) {
+    ICD_CALL_VOID(vkbc_vkCmdBeginRendering(c_, CMDBUF_RAW(commandBuffer), pRenderingInfo));
+}
+
+static VKAPI_ATTR void VKAPI_CALL icd_vkCmdEndRendering(VkCommandBuffer commandBuffer) {
+    ICD_CALL_VOID(vkbc_vkCmdEndRendering(c_, CMDBUF_RAW(commandBuffer)));
+}
+
+static VKAPI_ATTR void VKAPI_CALL icd_vkCmdBindVertexBuffers(
+    VkCommandBuffer commandBuffer, uint32_t firstBinding, uint32_t bindingCount,
+    const VkBuffer *pBuffers, const VkDeviceSize *pOffsets) {
+    ICD_CALL_VOID(vkbc_vkCmdBindVertexBuffers(c_, CMDBUF_RAW(commandBuffer), firstBinding, bindingCount, pBuffers, pOffsets));
+}
+
+static VKAPI_ATTR void VKAPI_CALL icd_vkCmdBindIndexBuffer(
+    VkCommandBuffer commandBuffer, VkBuffer buffer, VkDeviceSize offset, VkIndexType indexType) {
+    ICD_CALL_VOID(vkbc_vkCmdBindIndexBuffer(c_, CMDBUF_RAW(commandBuffer), buffer, offset, indexType));
+}
+
+static VKAPI_ATTR void VKAPI_CALL icd_vkCmdDraw(
+    VkCommandBuffer commandBuffer, uint32_t vertexCount, uint32_t instanceCount,
+    uint32_t firstVertex, uint32_t firstInstance) {
+    ICD_CALL_VOID(vkbc_vkCmdDraw(c_, CMDBUF_RAW(commandBuffer), vertexCount, instanceCount, firstVertex, firstInstance));
+}
+
+static VKAPI_ATTR void VKAPI_CALL icd_vkCmdDrawIndexed(
+    VkCommandBuffer commandBuffer, uint32_t indexCount, uint32_t instanceCount,
+    uint32_t firstIndex, int32_t vertexOffset, uint32_t firstInstance) {
+    ICD_CALL_VOID(vkbc_vkCmdDrawIndexed(c_, CMDBUF_RAW(commandBuffer), indexCount, instanceCount, firstIndex, vertexOffset, firstInstance));
+}
+
+static VKAPI_ATTR void VKAPI_CALL icd_vkCmdDrawIndirect(
+    VkCommandBuffer commandBuffer, VkBuffer buffer, VkDeviceSize offset, uint32_t drawCount, uint32_t stride) {
+    ICD_CALL_VOID(vkbc_vkCmdDrawIndirect(c_, CMDBUF_RAW(commandBuffer), buffer, offset, drawCount, stride));
+}
+
+static VKAPI_ATTR void VKAPI_CALL icd_vkCmdDrawIndexedIndirect(
+    VkCommandBuffer commandBuffer, VkBuffer buffer, VkDeviceSize offset, uint32_t drawCount, uint32_t stride) {
+    ICD_CALL_VOID(vkbc_vkCmdDrawIndexedIndirect(c_, CMDBUF_RAW(commandBuffer), buffer, offset, drawCount, stride));
+}
+
+static VKAPI_ATTR void VKAPI_CALL icd_vkCmdSetViewport(
+    VkCommandBuffer commandBuffer, uint32_t firstViewport, uint32_t viewportCount, const VkViewport *pViewports) {
+    ICD_CALL_VOID(vkbc_vkCmdSetViewport(c_, CMDBUF_RAW(commandBuffer), firstViewport, viewportCount, pViewports));
+}
+
+static VKAPI_ATTR void VKAPI_CALL icd_vkCmdSetScissor(
+    VkCommandBuffer commandBuffer, uint32_t firstScissor, uint32_t scissorCount, const VkRect2D *pScissors) {
+    ICD_CALL_VOID(vkbc_vkCmdSetScissor(c_, CMDBUF_RAW(commandBuffer), firstScissor, scissorCount, pScissors));
+}
+
+static VKAPI_ATTR void VKAPI_CALL icd_vkCmdSetLineWidth(VkCommandBuffer commandBuffer, float lineWidth) {
+    ICD_CALL_VOID(vkbc_vkCmdSetLineWidth(c_, CMDBUF_RAW(commandBuffer), lineWidth));
+}
+
+static VKAPI_ATTR void VKAPI_CALL icd_vkCmdSetDepthBias(
+    VkCommandBuffer commandBuffer, float depthBiasConstantFactor, float depthBiasClamp, float depthBiasSlopeFactor) {
+    ICD_CALL_VOID(vkbc_vkCmdSetDepthBias(c_, CMDBUF_RAW(commandBuffer), depthBiasConstantFactor, depthBiasClamp, depthBiasSlopeFactor));
+}
+
+static VKAPI_ATTR void VKAPI_CALL icd_vkCmdSetBlendConstants(
+    VkCommandBuffer commandBuffer, const float blendConstants[4]) {
+    ICD_CALL_VOID(vkbc_vkCmdSetBlendConstants(c_, CMDBUF_RAW(commandBuffer), blendConstants));
+}
+
+static VKAPI_ATTR void VKAPI_CALL icd_vkCmdSetDepthBounds(
+    VkCommandBuffer commandBuffer, float minDepthBounds, float maxDepthBounds) {
+    ICD_CALL_VOID(vkbc_vkCmdSetDepthBounds(c_, CMDBUF_RAW(commandBuffer), minDepthBounds, maxDepthBounds));
+}
+
+static VKAPI_ATTR void VKAPI_CALL icd_vkCmdSetStencilCompareMask(
+    VkCommandBuffer commandBuffer, VkStencilFaceFlags faceMask, uint32_t compareMask) {
+    ICD_CALL_VOID(vkbc_vkCmdSetStencilCompareMask(c_, CMDBUF_RAW(commandBuffer), faceMask, compareMask));
+}
+
+static VKAPI_ATTR void VKAPI_CALL icd_vkCmdSetStencilWriteMask(
+    VkCommandBuffer commandBuffer, VkStencilFaceFlags faceMask, uint32_t writeMask) {
+    ICD_CALL_VOID(vkbc_vkCmdSetStencilWriteMask(c_, CMDBUF_RAW(commandBuffer), faceMask, writeMask));
+}
+
+static VKAPI_ATTR void VKAPI_CALL icd_vkCmdSetStencilReference(
+    VkCommandBuffer commandBuffer, VkStencilFaceFlags faceMask, uint32_t reference) {
+    ICD_CALL_VOID(vkbc_vkCmdSetStencilReference(c_, CMDBUF_RAW(commandBuffer), faceMask, reference));
+}
+
+static VKAPI_ATTR void VKAPI_CALL icd_vkCmdCopyImageToBuffer(
+    VkCommandBuffer commandBuffer, VkImage srcImage, VkImageLayout srcImageLayout,
+    VkBuffer dstBuffer, uint32_t regionCount, const VkBufferImageCopy *pRegions) {
+    ICD_CALL_VOID(vkbc_vkCmdCopyImageToBuffer(c_, CMDBUF_RAW(commandBuffer), srcImage, srcImageLayout, dstBuffer, regionCount, pRegions));
+}
+
+static VKAPI_ATTR void VKAPI_CALL icd_vkCmdCopyBufferToImage(
+    VkCommandBuffer commandBuffer, VkBuffer srcBuffer, VkImage dstImage,
+    VkImageLayout dstImageLayout, uint32_t regionCount, const VkBufferImageCopy *pRegions) {
+    ICD_CALL_VOID(vkbc_vkCmdCopyBufferToImage(c_, CMDBUF_RAW(commandBuffer), srcBuffer, dstImage, dstImageLayout, regionCount, pRegions));
+}
+
+static VKAPI_ATTR void VKAPI_CALL icd_vkCmdCopyImage(
+    VkCommandBuffer commandBuffer, VkImage srcImage, VkImageLayout srcImageLayout,
+    VkImage dstImage, VkImageLayout dstImageLayout, uint32_t regionCount, const VkImageCopy *pRegions) {
+    ICD_CALL_VOID(vkbc_vkCmdCopyImage(c_, CMDBUF_RAW(commandBuffer), srcImage, srcImageLayout, dstImage, dstImageLayout, regionCount, pRegions));
+}
+
+static VKAPI_ATTR void VKAPI_CALL icd_vkCmdBlitImage(
+    VkCommandBuffer commandBuffer, VkImage srcImage, VkImageLayout srcImageLayout,
+    VkImage dstImage, VkImageLayout dstImageLayout, uint32_t regionCount,
+    const VkImageBlit *pRegions, VkFilter filter) {
+    ICD_CALL_VOID(vkbc_vkCmdBlitImage(c_, CMDBUF_RAW(commandBuffer), srcImage, srcImageLayout, dstImage, dstImageLayout, regionCount, pRegions, filter));
+}
+
+static VKAPI_ATTR void VKAPI_CALL icd_vkCmdResolveImage(
+    VkCommandBuffer commandBuffer, VkImage srcImage, VkImageLayout srcImageLayout,
+    VkImage dstImage, VkImageLayout dstImageLayout, uint32_t regionCount, const VkImageResolve *pRegions) {
+    ICD_CALL_VOID(vkbc_vkCmdResolveImage(c_, CMDBUF_RAW(commandBuffer), srcImage, srcImageLayout, dstImage, dstImageLayout, regionCount, pRegions));
+}
+
+static VKAPI_ATTR void VKAPI_CALL icd_vkCmdClearColorImage(
+    VkCommandBuffer commandBuffer, VkImage image, VkImageLayout imageLayout,
+    const VkClearColorValue *pColor, uint32_t rangeCount, const VkImageSubresourceRange *pRanges) {
+    ICD_CALL_VOID(vkbc_vkCmdClearColorImage(c_, CMDBUF_RAW(commandBuffer), image, imageLayout, pColor, rangeCount, pRanges));
+}
+
+static VKAPI_ATTR void VKAPI_CALL icd_vkCmdClearDepthStencilImage(
+    VkCommandBuffer commandBuffer, VkImage image, VkImageLayout imageLayout,
+    const VkClearDepthStencilValue *pDepthStencil, uint32_t rangeCount, const VkImageSubresourceRange *pRanges) {
+    ICD_CALL_VOID(vkbc_vkCmdClearDepthStencilImage(c_, CMDBUF_RAW(commandBuffer), image, imageLayout, pDepthStencil, rangeCount, pRanges));
+}
+
+static VKAPI_ATTR void VKAPI_CALL icd_vkCmdClearAttachments(
+    VkCommandBuffer commandBuffer, uint32_t attachmentCount, const VkClearAttachment *pAttachments,
+    uint32_t rectCount, const VkClearRect *pRects) {
+    ICD_CALL_VOID(vkbc_vkCmdClearAttachments(c_, CMDBUF_RAW(commandBuffer), attachmentCount, pAttachments, rectCount, pRects));
 }
 
 /* ---- ProcAddr tables & Loader-ICD v5 exports ---- */
@@ -1174,6 +1358,18 @@ static const proc_ent k_dev_procs[] = {
     ENT("vkBindImageMemory", icd_vkBindImageMemory),
     ENT("vkBindImageMemory2", icd_vkBindImageMemory2),
     ENT("vkBindImageMemory2KHR", icd_vkBindImageMemory2),
+    ENT("vkCreateImageView", icd_vkCreateImageView),
+    ENT("vkDestroyImageView", icd_vkDestroyImageView),
+    ENT("vkGetImageSubresourceLayout", icd_vkGetImageSubresourceLayout),
+    ENT("vkCreateSampler", icd_vkCreateSampler),
+    ENT("vkDestroySampler", icd_vkDestroySampler),
+    ENT("vkCreateRenderPass", icd_vkCreateRenderPass),
+    ENT("vkCreateRenderPass2", icd_vkCreateRenderPass2),
+    ENT("vkCreateRenderPass2KHR", icd_vkCreateRenderPass2),
+    ENT("vkDestroyRenderPass", icd_vkDestroyRenderPass),
+    ENT("vkGetRenderAreaGranularity", icd_vkGetRenderAreaGranularity),
+    ENT("vkCreateFramebuffer", icd_vkCreateFramebuffer),
+    ENT("vkDestroyFramebuffer", icd_vkDestroyFramebuffer),
     ENT("vkCreateShaderModule", icd_vkCreateShaderModule),
     ENT("vkDestroyShaderModule", icd_vkDestroyShaderModule),
     ENT("vkCreateDescriptorSetLayout", icd_vkCreateDescriptorSetLayout),
@@ -1189,6 +1385,7 @@ static const proc_ent k_dev_procs[] = {
     ENT("vkCreatePipelineCache", icd_vkCreatePipelineCache),
     ENT("vkDestroyPipelineCache", icd_vkDestroyPipelineCache),
     ENT("vkCreateComputePipelines", icd_vkCreateComputePipelines),
+    ENT("vkCreateGraphicsPipelines", icd_vkCreateGraphicsPipelines),
     ENT("vkDestroyPipeline", icd_vkDestroyPipeline),
     ENT("vkCreateCommandPool", icd_vkCreateCommandPool),
     ENT("vkDestroyCommandPool", icd_vkDestroyCommandPool),
@@ -1209,6 +1406,42 @@ static const proc_ent k_dev_procs[] = {
     ENT("vkCmdCopyBuffer", icd_vkCmdCopyBuffer),
     ENT("vkCmdFillBuffer", icd_vkCmdFillBuffer),
     ENT("vkCmdUpdateBuffer", icd_vkCmdUpdateBuffer),
+    ENT("vkCmdBeginRenderPass", icd_vkCmdBeginRenderPass),
+    ENT("vkCmdNextSubpass", icd_vkCmdNextSubpass),
+    ENT("vkCmdEndRenderPass", icd_vkCmdEndRenderPass),
+    ENT("vkCmdBeginRenderPass2", icd_vkCmdBeginRenderPass2),
+    ENT("vkCmdBeginRenderPass2KHR", icd_vkCmdBeginRenderPass2),
+    ENT("vkCmdNextSubpass2", icd_vkCmdNextSubpass2),
+    ENT("vkCmdNextSubpass2KHR", icd_vkCmdNextSubpass2),
+    ENT("vkCmdEndRenderPass2", icd_vkCmdEndRenderPass2),
+    ENT("vkCmdEndRenderPass2KHR", icd_vkCmdEndRenderPass2),
+    ENT("vkCmdBeginRendering", icd_vkCmdBeginRendering),
+    ENT("vkCmdBeginRenderingKHR", icd_vkCmdBeginRendering),
+    ENT("vkCmdEndRendering", icd_vkCmdEndRendering),
+    ENT("vkCmdEndRenderingKHR", icd_vkCmdEndRendering),
+    ENT("vkCmdBindVertexBuffers", icd_vkCmdBindVertexBuffers),
+    ENT("vkCmdBindIndexBuffer", icd_vkCmdBindIndexBuffer),
+    ENT("vkCmdDraw", icd_vkCmdDraw),
+    ENT("vkCmdDrawIndexed", icd_vkCmdDrawIndexed),
+    ENT("vkCmdDrawIndirect", icd_vkCmdDrawIndirect),
+    ENT("vkCmdDrawIndexedIndirect", icd_vkCmdDrawIndexedIndirect),
+    ENT("vkCmdSetViewport", icd_vkCmdSetViewport),
+    ENT("vkCmdSetScissor", icd_vkCmdSetScissor),
+    ENT("vkCmdSetLineWidth", icd_vkCmdSetLineWidth),
+    ENT("vkCmdSetDepthBias", icd_vkCmdSetDepthBias),
+    ENT("vkCmdSetBlendConstants", icd_vkCmdSetBlendConstants),
+    ENT("vkCmdSetDepthBounds", icd_vkCmdSetDepthBounds),
+    ENT("vkCmdSetStencilCompareMask", icd_vkCmdSetStencilCompareMask),
+    ENT("vkCmdSetStencilWriteMask", icd_vkCmdSetStencilWriteMask),
+    ENT("vkCmdSetStencilReference", icd_vkCmdSetStencilReference),
+    ENT("vkCmdCopyImageToBuffer", icd_vkCmdCopyImageToBuffer),
+    ENT("vkCmdCopyBufferToImage", icd_vkCmdCopyBufferToImage),
+    ENT("vkCmdCopyImage", icd_vkCmdCopyImage),
+    ENT("vkCmdBlitImage", icd_vkCmdBlitImage),
+    ENT("vkCmdResolveImage", icd_vkCmdResolveImage),
+    ENT("vkCmdClearColorImage", icd_vkCmdClearColorImage),
+    ENT("vkCmdClearDepthStencilImage", icd_vkCmdClearDepthStencilImage),
+    ENT("vkCmdClearAttachments", icd_vkCmdClearAttachments),
 };
 
 static PFN_vkVoidFunction lookup_proc(const proc_ent *tab, size_t n, const char *name) {

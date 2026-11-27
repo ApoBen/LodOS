@@ -22,7 +22,7 @@ Handle map: server ids are table indices (vkr_h_out inserts, vkr_h_in looks up, 
 Two-call idiom: count is in/out, array gets capacity = *count at call time; VK_INCOMPLETE is >= 0.
 """
 import os
-from gen import eval_len_expr
+from gen import discover_in_pnext, eval_len_expr, len_refs, stype_enum as gen_stype_enum
 
 HDR_CMD_BASE = 1  # cmd ids follow vkb_cmds.h enum
 
@@ -44,10 +44,7 @@ def emit(reg, Gen, Unsupported, cmds, out, hdr):
         return True
 
     def stype_enum(s):
-        ms = R.structs.get(s, [])
-        if len(ms) >= 2 and ms[0].name == 'sType' and ms[1].name == 'pNext' and ms[0].values:
-            return ms[0].values.split(',')[0]
-        return None
+        return gen_stype_enum(R, s)
 
     def chained_out(s):
         """Out struct with sType + void* pNext header and flat remaining members."""
@@ -128,7 +125,9 @@ def emit(reg, Gen, Unsupported, cmds, out, hdr):
             i = 'i%d' % g.u()
             return ['for (size_t %s = 0; %s < sizeof(%s) / sizeof((%s)[0]); %s++) {' % (i, i, ex, ex, i)] + \
                 ['    ' + x for x in enc_val(ek, base, '(%s)[%s]' % (ex, i))] + ['}']
-        if k in ('pnext', 'skip_alloc'):
+        if k == 'pnext':
+            return ['vkr_in_pnext_enc(w, (const void *)(%s));' % ex]
+        if k == 'skip_alloc':
             return ['vkr_put_u8(w, (%s) != NULL);' % ex]
         if k == 'string':
             return ['vkr_put_str(w, %s);' % ex]
@@ -162,7 +161,7 @@ def emit(reg, Gen, Unsupported, cmds, out, hdr):
             return ['for (size_t %s = 0; %s < sizeof(%s) / sizeof((%s)[0]); %s++) {' % (i, i, lv, lv, i)] + \
                 ['    ' + x for x in dec_val(ek, base, '(%s)[%s]' % (lv, i))] + ['}']
         if k == 'pnext':
-            return ['if (vkr_get_u8(r)) vkr_fail(&r->err, VKR_E_PNEXT);', '%s = NULL;' % lv]
+            return ['%s = (void *)vkr_in_pnext_dec(r);' % lv]
         if k == 'skip_alloc':
             return ['(void)vkr_get_u8(r);', '%s = NULL;' % lv]
         if k == 'string':
@@ -188,22 +187,26 @@ def emit(reg, Gen, Unsupported, cmds, out, hdr):
         raise AssertionError(k)
 
     def count_checks(decls, acc, nv, is_param):
-        """wire array count must equal the declared count member/param (scalar, simple name)."""
+        """wire array count must equal the declared count expression over non-pointer members/params."""
         names = {d.name: d for d in decls}
         res = []
         for d in decls:
             k, _ = g.classify(d, is_param)
             if k not in ('array', 'strarray', 'bytes'):
                 continue
-            if d.len[0] == 'codeSize / 4' and 'codeSize' in names:
-                res.append('if (%s && ((%s) %% 4 != 0 || %s != (uint32_t)((%s) / 4))) vkr_fail(&r->err, VKR_E_COUNT);' %
-                           (acc(d.name), acc('codeSize'), nv(d.name), acc('codeSize')))
+            ln0 = d.len[0]
+            if '->' in ln0:
                 continue
-            ln = names.get(d.len[0])
-            if ln is None or ln.depth != 0:
+            refs = len_refs(ln0)
+            if any(nm not in names or names[nm].depth != 0 for nm in refs):
                 continue
-            res.append('if (%s && %s != (uint32_t)(%s)) vkr_fail(&r->err, VKR_E_COUNT);' %
-                       (acc(d.name), nv(d.name), acc(ln.name)))
+            exp = eval_len_expr(ln0, acc)
+            if ln0 == 'codeSize / 4' and 'codeSize' in names:
+                res.append('if (%s && ((%s) %% 4 != 0 || %s != (uint32_t)%s)) vkr_fail(&r->err, VKR_E_COUNT);' %
+                           (acc(d.name), acc('codeSize'), nv(d.name), exp))
+            else:
+                res.append('if (%s && %s != (uint32_t)%s) vkr_fail(&r->err, VKR_E_COUNT);' %
+                           (acc(d.name), nv(d.name), exp))
         return res
 
     # ---- pick commands & chained out-structs ---------------------------
@@ -265,6 +268,22 @@ def emit(reg, Gen, Unsupported, cmds, out, hdr):
             register_body_deps(s)
             chained_all.append(s)
 
+    in_roots = set()
+    def collect_in_structs(s):
+        if s in in_roots or R.cat.get(s) != 'struct':
+            return
+        in_roots.add(s)
+        for m in R.structs[s]:
+            b = R.res(m.base)
+            if R.cat.get(b) == 'struct':
+                collect_in_structs(b)
+    for c in ok:
+        ps = R.cmds[c]
+        for p in ps:
+            if dirn(p, ps) == 'in':
+                collect_in_structs(R.res(p.base))
+    in_pnext_exts = discover_in_pnext(R, g, Unsupported, in_roots)
+
     structs = list(g.used_structs)
 
     # ---- vkb_rpc.h ------------------------------------------------------
@@ -281,6 +300,9 @@ def emit(reg, Gen, Unsupported, cmds, out, hdr):
         h += ['void vkrw_%s(vkr_wr *w, const %s *s);' % (s, s), 'void vkrr_%s(vkr_rd *r, %s *s);' % (s, s)]
     for s in chained_all:
         h += ['void vkrw_body_%s(vkr_wr *w, const %s *s);' % (s, s), 'void vkrr_body_%s(vkr_rd *r, %s *s);' % (s, s)]
+    h += ['', '/* in pNext chain helpers (pure-input core structextends; unknown sType -> VK_ERROR_FEATURE_NOT_PRESENT) */',
+          'void vkr_in_pnext_enc(vkr_wr *w, const void *pnext);',
+          'void *vkr_in_pnext_dec(vkr_rd *r);']
     if chained_roots:
         h += ['', '/* out pNext chain helpers (unknown sTypes -> zero-skip, never send garbage) */',
               'typedef struct { uint32_t n; int32_t *stypes; void **nodes; } vkr_out_chain;',
@@ -334,6 +356,25 @@ def emit(reg, Gen, Unsupported, cmds, out, hdr):
         mem = R.structs[s]
         s_cnt = lambda ln0: eval_len_expr(ln0, lambda nm: 's->%s' % nm)
         m.append('void vkrw_%s(vkr_wr *w, const %s *s) {' % (s, s))
+        m.append('    (void)w; (void)s;')
+        if s == 'VkGraphicsPipelineCreateInfo':
+            m += ['    int gp_tess_ = (s->flags & VK_PIPELINE_CREATE_LIBRARY_BIT_KHR) != 0;',
+                  '    if (!gp_tess_ && s->pStages) {',
+                  '        for (uint32_t gi_ = 0; gi_ < s->stageCount; gi_++)',
+                  '            if (s->pStages[gi_].stage & (VK_SHADER_STAGE_TESSELLATION_CONTROL_BIT | VK_SHADER_STAGE_TESSELLATION_EVALUATION_BIT))',
+                  '                gp_tess_ = 1;',
+                  '    }',
+                  '    int gp_dyn_vp_ = 0, gp_dyn_sc_ = 0, gp_dyn_rd_ = 0;',
+                  '    if (s->pDynamicState && s->pDynamicState->pDynamicStates) {',
+                  '        for (uint32_t gi_ = 0; gi_ < s->pDynamicState->dynamicStateCount; gi_++) {',
+                  '            VkDynamicState ds_ = s->pDynamicState->pDynamicStates[gi_];',
+                  '            if (ds_ == VK_DYNAMIC_STATE_VIEWPORT || ds_ == VK_DYNAMIC_STATE_VIEWPORT_WITH_COUNT) gp_dyn_vp_ = 1;',
+                  '            else if (ds_ == VK_DYNAMIC_STATE_SCISSOR || ds_ == VK_DYNAMIC_STATE_SCISSOR_WITH_COUNT) gp_dyn_sc_ = 1;',
+                  '            else if (ds_ == VK_DYNAMIC_STATE_RASTERIZER_DISCARD_ENABLE) gp_dyn_rd_ = 1;',
+                  '        }',
+                  '    }',
+                  '    int gp_discard_ = !(s->flags & VK_PIPELINE_CREATE_LIBRARY_BIT_KHR) &&',
+                  '                      s->pRasterizationState && s->pRasterizationState->rasterizerDiscardEnable && !gp_dyn_rd_;']
         for d in mem:
             if s == 'VkDescriptorSetLayoutBinding' and d.name == 'pImmutableSamplers':
                 m += ['    { const VkSampler *is_ = vkr_ds_has_imm_sampler(s->descriptorType) ? s->pImmutableSamplers : NULL;'] + \
@@ -355,17 +396,117 @@ def emit(reg, Gen, Unsupported, cmds, out, hdr):
             elif s == 'VkWriteDescriptorSet' and d.name == 'pTexelBufferView':
                 m += ['    { const VkBufferView *pt_ = vkr_ds_has_texel(s->descriptorType) ? s->pTexelBufferView : NULL;'] + \
                      ['      ' + x for x in enc_in(d, 'pt_', s_cnt, False)] + ['    }']
+            elif s == 'VkGraphicsPipelineCreateInfo' and d.name == 'pTessellationState':
+                m += ['    { const VkPipelineTessellationStateCreateInfo *ts_ = gp_tess_ ? s->pTessellationState : NULL;'] + \
+                     ['      ' + x for x in enc_in(d, 'ts_', s_cnt, False)] + ['    }']
+            elif s == 'VkGraphicsPipelineCreateInfo' and d.name == 'pViewportState':
+                m += ['    { VkPipelineViewportStateCreateInfo vp_tmp_;',
+                      '      const VkPipelineViewportStateCreateInfo *vp_ = gp_discard_ ? NULL : s->pViewportState;',
+                      '      if (vp_ && (gp_dyn_vp_ || gp_dyn_sc_)) {',
+                      '          vp_tmp_ = *vp_;',
+                      '          if (gp_dyn_vp_) vp_tmp_.pViewports = NULL;',
+                      '          if (gp_dyn_sc_) vp_tmp_.pScissors = NULL;',
+                      '          vp_ = &vp_tmp_;',
+                      '      }'] + ['      ' + x for x in enc_in(d, 'vp_', s_cnt, False)] + ['    }']
+            elif s == 'VkGraphicsPipelineCreateInfo' and d.name in ('pMultisampleState', 'pDepthStencilState', 'pColorBlendState'):
+                m += ['    { %s st_ = gp_discard_ ? NULL : s->%s;' % (d.ctype, d.name)] + \
+                     ['      ' + x for x in enc_in(d, 'st_', s_cnt, False)] + ['    }']
             else:
                 m += ['    ' + x for x in enc_in(d, 's->%s' % d.name, s_cnt, False)]
         m += ['}', '']
         m.append('void vkrr_%s(vkr_rd *r, %s *s) {' % (s, s))
+        m.append('    (void)r; (void)s;')
         arrs = [d for d in mem if g.classify(d, False)[0] in ('array', 'strarray', 'bytes')]
         for d in arrs:
-            m.append('    uint32_t n_%s = 0;' % d.name)
+            m.append('    uint32_t n_%s = 0; (void)n_%s;' % (d.name, d.name))
         for d in mem:
             m += ['    ' + x for x in dec_in(d, 's->%s' % d.name, False, 'n_%s' % d.name)]
         m += ['    ' + x for x in count_checks(mem, lambda nm: 's->%s' % nm, lambda nm: 'n_%s' % nm, False)]
         m += ['}', '']
+
+    for s in in_pnext_exts:
+        mem = R.structs[s][2:]
+        s_cnt = lambda ln0: eval_len_expr(ln0, lambda nm: 's->%s' % nm)
+        m.append('static void vkrw_in_ext_%s(vkr_wr *w, const %s *s) {' % (s, s))
+        m.append('    (void)w; (void)s;')
+        for d in mem:
+            m += ['    ' + x for x in enc_in(d, 's->%s' % d.name, s_cnt, False)]
+        m += ['}', '']
+        m.append('static void vkrr_in_ext_%s(vkr_rd *r, %s *s) {' % (s, s))
+        m.append('    (void)r; (void)s;')
+        arrs = [d for d in mem if g.classify(d, False)[0] in ('array', 'strarray', 'bytes')]
+        for d in arrs:
+            m.append('    uint32_t n_%s = 0; (void)n_%s;' % (d.name, d.name))
+        for d in mem:
+            m += ['    ' + x for x in dec_in(d, 's->%s' % d.name, False, 'n_%s' % d.name)]
+        m += ['    ' + x for x in count_checks(R.structs[s], lambda nm: 's->%s' % nm, lambda nm: 'n_%s' % nm, False)]
+        m += ['}', '']
+
+    m += ['static _Thread_local uint32_t t_in_pnext_depth;', '',
+          'static int vkr_in_pnext_skip(const VkBaseInStructure *c) {',
+          '    if (c->sType == VK_STRUCTURE_TYPE_LOADER_INSTANCE_CREATE_INFO ||',
+          '        c->sType == VK_STRUCTURE_TYPE_LOADER_DEVICE_CREATE_INFO) return 1;',
+          '    if (c->sType == VK_STRUCTURE_TYPE_PIPELINE_CREATION_FEEDBACK_CREATE_INFO) {',
+          '        const VkPipelineCreationFeedbackCreateInfo *fb = (const VkPipelineCreationFeedbackCreateInfo *)c;',
+          '        if (fb->pPipelineCreationFeedback) *fb->pPipelineCreationFeedback = (VkPipelineCreationFeedback){ 0 };',
+          '        if (fb->pPipelineStageCreationFeedbacks)',
+          '            for (uint32_t i = 0; i < fb->pipelineStageCreationFeedbackCount; i++)',
+          '                fb->pPipelineStageCreationFeedbacks[i] = (VkPipelineCreationFeedback){ 0 };',
+          '        return 1;',
+          '    }',
+          '    return 0;',
+          '}', '',
+          'static int vkr_in_pnext_enc_one(vkr_wr *w, VkStructureType st, const void *nd) {',
+          '    switch ((int32_t)st) {']
+    for s in in_pnext_exts:
+        m.append('    case %s: vkr_put_u8(w, 1); vkrw_in_ext_%s(w, (const %s *)nd); return 1;' %
+                 (stype_enum(s), s, s))
+    m += ['    default: (void)w; (void)nd; return 0;', '    }', '}', '',
+          'static void *vkr_in_pnext_dec_one(vkr_rd *r, VkStructureType st) {',
+          '    switch ((int32_t)st) {']
+    for s in in_pnext_exts:
+        m.append('    case %s: { %s *nd = (%s *)vkr_alloc(r, sizeof(%s)); if (nd) vkrr_in_ext_%s(r, nd); return nd; }' %
+                 (stype_enum(s), s, s, s, s))
+    m += ['    default: (void)r; return NULL;', '    }', '}', '',
+          'void vkr_in_pnext_enc(vkr_wr *w, const void *pnext) {',
+          '    if (!pnext) { vkr_put_u8(w, 0); return; }',
+          '    if (t_in_pnext_depth >= 16u) { vkr_fail(&w->err, VKR_E_BOUNDS); return; }',
+          '    uint32_t n = 0;',
+          '    for (const VkBaseInStructure *c = (const VkBaseInStructure *)pnext; c; c = c->pNext) {',
+          '        if (vkr_in_pnext_skip(c)) continue;',
+          '        if (++n > VKR_MAX_PNEXT) { vkr_fail(&w->err, VKR_E_BOUNDS); return; }',
+          '    }',
+          '    if (!n) { vkr_put_u8(w, 0); return; }',
+          '    vkr_put_u8(w, 1);',
+          '    vkr_put_u32(w, n);',
+          '    t_in_pnext_depth++;',
+          '    for (const VkBaseInStructure *c = (const VkBaseInStructure *)pnext; c; c = c->pNext) {',
+          '        if (vkr_in_pnext_skip(c)) continue;',
+          '        vkr_put_u32(w, (uint32_t)c->sType);',
+          '        if (!vkr_in_pnext_enc_one(w, c->sType, c)) vkr_put_u8(w, 0);',
+          '    }',
+          '    t_in_pnext_depth--;',
+          '}', '',
+          'void *vkr_in_pnext_dec(vkr_rd *r) {',
+          '    if (!vkr_get_u8(r)) return NULL;',
+          '    if (t_in_pnext_depth >= 16u) { vkr_fail(&r->err, VKR_E_BOUNDS); return NULL; }',
+          '    uint32_t n = vkr_get_u32(r);',
+          '    if (!n || n > VKR_MAX_PNEXT) { vkr_fail(&r->err, VKR_E_BOUNDS); return NULL; }',
+          '    VkBaseOutStructure *head = NULL, *tail = NULL;',
+          '    t_in_pnext_depth++;',
+          '    for (uint32_t i = 0; i < n && !r->err; i++) {',
+          '        VkStructureType st = (VkStructureType)vkr_get_u32(r);',
+          '        if (!vkr_get_u8(r)) { vkr_fail(&r->err, VKR_E_PNEXT); break; }',
+          '        VkBaseOutStructure *b = (VkBaseOutStructure *)vkr_in_pnext_dec_one(r, st);',
+          '        if (!b) { if (!r->err) vkr_fail(&r->err, VKR_E_PNEXT); break; }',
+          '        b->sType = st;',
+          '        b->pNext = NULL;',
+          '        if (tail) tail->pNext = b; else head = b;',
+          '        tail = b;',
+          '    }',
+          '    t_in_pnext_depth--;',
+          '    return head;',
+          '}', '']
 
     for s in chained_all:
         mem = R.structs[s][2:]
@@ -658,7 +799,7 @@ def emit(reg, Gen, Unsupported, cmds, out, hdr):
     m += ['    default: return 0;', '    }', '    return w.err ? 0 : w.off;', '}', '']
     open(os.path.join(out, 'vkb_rpc_server.c'), 'w').write('\n'.join(m))
 
-    print('rpcgen: %d cmds bridged, %d not, %d structs (%d pNext out-exts)' %
-          (len(ok), len(bad), len(structs), len(pnext_exts)))
+    print('rpcgen: %d cmds bridged, %d not, %d structs (%d pNext in-exts, %d pNext out-exts)' %
+          (len(ok), len(bad), len(structs), len(in_pnext_exts), len(pnext_exts)))
     for c, why in bad.items():
         print('rpcgen: skip %s: %s' % (c, why))
