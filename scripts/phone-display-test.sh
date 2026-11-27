@@ -25,7 +25,7 @@ fi
 
 # 2. Stage jniLibs & installDebug via Gradle
 bash scripts/stage-jnilibs.sh
-if ! out=$((cd android && ./gradlew --no-daemon --console=plain installDebug </dev/null) 2>&1); then
+if ! out=$( (cd android && ./gradlew --no-daemon --console=plain installDebug </dev/null) 2>&1); then
   echo "$out" | tail -20
   APK=android/app/build/outputs/apk/debug/app-debug.apk
   if [ -f "$APK" ] && $A install -r "$APK"; then
