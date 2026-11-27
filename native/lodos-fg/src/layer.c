@@ -12,7 +12,6 @@ typedef struct InstanceDispatch {
     PFN_vkGetInstanceProcAddr gipa;
     PFN_vkGetDeviceProcAddr gdpa;
     PFN_vkDestroyInstance destroy_instance;
-    PFN_vkEnumeratePhysicalDevices enumerate_physical_devices;
     PFN_vkGetPhysicalDeviceSurfaceCapabilitiesKHR get_caps;
     PFN_vkGetPhysicalDeviceSurfaceCapabilities2KHR get_caps2;
     struct InstanceDispatch *next;
@@ -64,11 +63,6 @@ static VkResult VKAPI_CALL layer_caps(VkPhysicalDevice p, VkSurfaceKHR s, VkSurf
     }
     return r;
 }
-static VkResult VKAPI_CALL layer_enumerate_physical_devices(VkInstance i, uint32_t *count, VkPhysicalDevice *devices_out) {
-    InstanceDispatch *d = find_instance(i);
-    if (!d || !d->enumerate_physical_devices) return VK_ERROR_INITIALIZATION_FAILED;
-    return d->enumerate_physical_devices(i, count, devices_out);
-}
 static VkResult VKAPI_CALL layer_caps2(VkPhysicalDevice p, const VkPhysicalDeviceSurfaceInfo2KHR *info, VkSurfaceCapabilities2KHR *c) {
     InstanceDispatch *d = find_instance(p);
     if (!d || !d->get_caps2) return VK_ERROR_INITIALIZATION_FAILED;
@@ -96,7 +90,6 @@ static VkResult VKAPI_CALL layer_create_instance(const VkInstanceCreateInfo *ci,
     d->key = dispatch_key(*out); d->instance = *out; d->gipa = gipa;
     d->gdpa = (PFN_vkGetDeviceProcAddr)gipa(*out, "vkGetDeviceProcAddr");
     d->destroy_instance = (PFN_vkDestroyInstance)gipa(*out, "vkDestroyInstance");
-    d->enumerate_physical_devices = (PFN_vkEnumeratePhysicalDevices)gipa(*out, "vkEnumeratePhysicalDevices");
     d->get_caps = (PFN_vkGetPhysicalDeviceSurfaceCapabilitiesKHR)gipa(*out, "vkGetPhysicalDeviceSurfaceCapabilitiesKHR");
     d->get_caps2 = (PFN_vkGetPhysicalDeviceSurfaceCapabilities2KHR)gipa(*out, "vkGetPhysicalDeviceSurfaceCapabilities2KHR");
     d->next = instances; instances = d;
@@ -147,7 +140,6 @@ VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL vkGetInstanceProcAddr(VkInstance i, con
     if (!strcmp(name, "vkCreateInstance")) return (PFN_vkVoidFunction)layer_create_instance;
     InstanceDispatch *d = find_instance(i);
     if (!strcmp(name, "vkDestroyInstance")) return (PFN_vkVoidFunction)layer_destroy_instance;
-    if (!strcmp(name, "vkEnumeratePhysicalDevices")) return (PFN_vkVoidFunction)layer_enumerate_physical_devices;
     if (!strcmp(name, "vkCreateDevice")) return (PFN_vkVoidFunction)layer_create_device;
     if (!strcmp(name, "vkGetPhysicalDeviceSurfaceCapabilitiesKHR")) return (PFN_vkVoidFunction)layer_caps;
     if (!strcmp(name, "vkGetPhysicalDeviceSurfaceCapabilities2KHR")) return (PFN_vkVoidFunction)layer_caps2;
