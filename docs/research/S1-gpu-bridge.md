@@ -103,6 +103,13 @@ While `bionic-vulkan-wrapper` cannot run inside the `glibc` guest, **it runs nat
 
 ## Present path
 
+### Guest-side WSI v0 (T047, implemented)
+- `native/vk-bridge/icd/wsi_wayland.c` (#included by icd.c): VK_KHR_surface/wayland_surface/swapchain live entirely in the guest ICD; host never sees WSI objects (VK_KHR_swapchain stripped from host CreateDevice).
+- Swapchain image = bridged OPTIMAL VkImage + host-visible readback buffer (memfd shadow) + prebuilt copy cmdbuf; Acquire = round-robin + empty submit signalling sem/fence.
+- vkQueuePresentKHR: submit(wait sems, copy) -> wait fence (server syncs shadow) -> memcpy into wl_shm pool (XRGB8888) -> attach/damage_buffer/commit/flush on a private wl_event_queue.
+- libwayland-client dlopen'ed (no build dep). Proof: `test/host_wsi.sh` vkcube 120 frames on lodos-wl headless -> docs/screens/T047-wsi.png.
+- Limits: 2 full copies/frame (GPU->shadow->shm), sync present, no resize/OUT_OF_DATE handling, fixed queue (first created). Next: AHB/dmabuf zero-copy on phone.
+
 ### Existing Approaches Inspected
 - **`xMeM/mesa` + `termux-x11` (`lorie`)**:
   - On X11 (`wsi_common_ahardware_buffer.c`), `xMeM/mesa` allocates per-swapchain `AHardwareBuffer`s, tags DRI3 `PixmapFromBuffers` with synthetic DRM modifier `1255`, passes a `socketpair` fd over X11, and transfers the `AHardwareBuffer` via Bionic `AHardwareBuffer_sendHandleToUnixSocket` (`libandroid.so`). `termux-x11` (`lorie/InitOutput.c`, `buffer.c`, `renderer.cpp`) receives the `AHardwareBuffer`, imports an `EGLImageKHR`, and composites onto Android `SurfaceView`. (`AHardwareBuffer_sendHandleToUnixSocket` uses Bionic parcel IPC and cannot be called from `glibc`.)

@@ -2,6 +2,7 @@
  * Forwards Vulkan calls over vk-bridge (memfd SPSC rings + AF_UNIX SCM_RIGHTS) to host vkb_server.
  * Dispatchable handles wrap u64 bridge IDs in heap structs with VK_LOADER_DATA at offset 0 (R12). */
 #define _GNU_SOURCE
+#define VK_USE_PLATFORM_WAYLAND_KHR 1 /* T047 guest WSI (wsi_wayland.c); vulkan_wayland.h needs no wayland headers */
 #include <pthread.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -125,8 +126,10 @@ static void log_missing(const char *where, const char *name) {
 }
 
 static int icd_dev_ext_supported(const char *name);
+static int wsi_inst_ext(const char *name);
+static int wsi_dev_ext(const char *name);
 
-/* Instance extensions whose entrypoints this ICD supports (WSI comes in S2). */
+/* Instance extensions forwarded to the host (guest WSI exts are added/stripped separately, wsi_wayland.c). */
 static int icd_inst_ext_supported(const char *name) {
     static const char *const k_exts[] = {
         VK_KHR_GET_PHYSICAL_DEVICE_PROPERTIES_2_EXTENSION_NAME,
@@ -219,6 +222,11 @@ static VKAPI_ATTR VkResult VKAPI_CALL icd_vkEnumerateInstanceExtensionProperties
         if (icd_inst_ext_supported(raw[i].extensionName))
             filt[fn++] = raw[i];
     free(raw);
+    static const VkExtensionProperties k_wsi_inst[] = {
+        { VK_KHR_SURFACE_EXTENSION_NAME, 25 },
+        { VK_KHR_WAYLAND_SURFACE_EXTENSION_NAME, 6 },
+    };
+    for (size_t i = 0; i < sizeof(k_wsi_inst) / sizeof(k_wsi_inst[0]) && fn < 16; i++) filt[fn++] = k_wsi_inst[i];
 
     if (!pProperties) {
         *pPropertyCount = fn;
@@ -242,7 +250,7 @@ static VKAPI_ATTR VkResult VKAPI_CALL icd_vkCreateInstance(
         for (uint32_t i = 0; i < pCreateInfo->enabledExtensionCount; i++) {
             const char *en = pCreateInfo->ppEnabledExtensionNames[i];
             if (icd_inst_ext_supported(en)) exts[ext_n++] = en;
-            else if (!icd_loader_only_ext(en)) { free(exts); return VK_ERROR_EXTENSION_NOT_PRESENT; }
+            else if (!icd_loader_only_ext(en) && !wsi_inst_ext(en)) { free(exts); return VK_ERROR_EXTENSION_NOT_PRESENT; }
         }
     }
 
@@ -427,14 +435,16 @@ static VKAPI_ATTR VkResult VKAPI_CALL icd_vkEnumerateDeviceExtensionProperties(
     pthread_mutex_unlock(&g_mu);
     if (r < 0) { free(raw); return r; }
 
-    VkExtensionProperties *filt = raw_n ? calloc(raw_n, sizeof(*filt)) : NULL;
-    if (raw_n && !filt) { free(raw); return VK_ERROR_OUT_OF_HOST_MEMORY; }
+    VkExtensionProperties *filt = calloc(raw_n + 1, sizeof(*filt));
+    if (!filt) { free(raw); return VK_ERROR_OUT_OF_HOST_MEMORY; }
     uint32_t fn = 0;
     for (uint32_t i = 0; i < raw_n; i++) {
         if (icd_dev_ext_supported(raw[i].extensionName))
             filt[fn++] = raw[i];
     }
     free(raw);
+    /* T047: VK_KHR_swapchain is implemented guest-side (wsi_wayland.c) */
+    filt[fn++] = (VkExtensionProperties){ VK_KHR_SWAPCHAIN_EXTENSION_NAME, 70 };
 
     if (!pProperties) {
         *pPropertyCount = fn;
@@ -462,13 +472,26 @@ static VKAPI_ATTR VkResult VKAPI_CALL icd_vkCreateDevice(
     const VkAllocationCallbacks *pAllocator, VkDevice *pDevice) {
     if (!pd || !pCreateInfo || !pDevice) return VK_ERROR_INITIALIZATION_FAILED;
 
+    const char *dev_exts_stack[64];
+    const char **dev_exts = dev_exts_stack;
+    uint32_t dev_ext_n = 0;
+    if (pCreateInfo->enabledExtensionCount > 64) {
+        dev_exts = calloc(pCreateInfo->enabledExtensionCount, sizeof(*dev_exts));
+        if (!dev_exts) return VK_ERROR_OUT_OF_HOST_MEMORY;
+    }
     for (uint32_t i = 0; i < pCreateInfo->enabledExtensionCount; i++) {
         const char *en = pCreateInfo->ppEnabledExtensionNames[i];
-        if (!icd_dev_ext_supported(en))
+        if (wsi_dev_ext(en)) continue; /* guest-side WSI: never forwarded to the host */
+        if (!icd_dev_ext_supported(en)) {
+            if (dev_exts != dev_exts_stack) free(dev_exts);
             return VK_ERROR_EXTENSION_NOT_PRESENT;
+        }
+        dev_exts[dev_ext_n++] = en;
     }
 
     VkDeviceCreateInfo dci = *pCreateInfo;
+    dci.enabledExtensionCount = dev_ext_n;
+    dci.ppEnabledExtensionNames = dev_ext_n ? dev_exts : NULL;
     /* vkr_in_pnext_enc strips guest loader VkLayerDeviceCreateInfo while preserving feature chains */
     dci.enabledLayerCount = 0;
     dci.ppEnabledLayerNames = NULL;
@@ -522,6 +545,7 @@ static VKAPI_ATTR VkResult VKAPI_CALL icd_vkCreateDevice(
     pthread_mutex_unlock(&g_mu);
     free(cloned_head);
     free(dg_pds);
+    if (dev_exts != dev_exts_stack) free(dev_exts);
     if (r != VK_SUCCESS) { free(dev); return r; }
 
     dev->id = (uint64_t)(uintptr_t)raw_dev;
@@ -1136,6 +1160,7 @@ static const proc_ent k_global_procs[] = {
 };
 
 #include "vkb_icd_gen.inc"
+#include "wsi_wayland.c" /* T047 guest-side WSI (uses the thunks above) */
 
 static PFN_vkVoidFunction lookup_proc(const proc_ent *tab, size_t n, const char *name) {
     for (size_t i = 0; i < n; i++)
@@ -1146,6 +1171,7 @@ static PFN_vkVoidFunction lookup_proc(const proc_ent *tab, size_t n, const char 
 static VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL icd_vkGetDeviceProcAddr(VkDevice device, const char *pName) {
     if (!device || !pName) return NULL;
     PFN_vkVoidFunction fn = lookup_proc(k_dev_procs, sizeof(k_dev_procs) / sizeof(k_dev_procs[0]), pName);
+    if (!fn) fn = lookup_proc(k_wsi_dev_procs, sizeof(k_wsi_dev_procs) / sizeof(k_wsi_dev_procs[0]), pName);
     if (!fn) log_missing("GDPA", pName);
     return fn;
 }
@@ -1170,6 +1196,12 @@ VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL vk_icdGetInstanceProcAddr(VkInstance in
     if (fn) return fn;
     fn = lookup_proc(k_dev_procs, sizeof(k_dev_procs) / sizeof(k_dev_procs[0]), pName);
     if (fn) return fn;
+    fn = lookup_proc(k_wsi_inst_procs, sizeof(k_wsi_inst_procs) / sizeof(k_wsi_inst_procs[0]), pName);
+    if (fn) return fn;
+    fn = lookup_proc(k_wsi_pdev_procs, sizeof(k_wsi_pdev_procs) / sizeof(k_wsi_pdev_procs[0]), pName);
+    if (fn) return fn;
+    fn = lookup_proc(k_wsi_dev_procs, sizeof(k_wsi_dev_procs) / sizeof(k_wsi_dev_procs[0]), pName);
+    if (fn) return fn;
     log_missing("GIPA", pName);
     return NULL;
 }
@@ -1177,6 +1209,7 @@ VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL vk_icdGetInstanceProcAddr(VkInstance in
 VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL vk_icdGetPhysicalDeviceProcAddr(VkInstance instance, const char *pName) {
     if (!instance || !pName) return NULL;
     PFN_vkVoidFunction fn = lookup_proc(k_pdev_procs, sizeof(k_pdev_procs) / sizeof(k_pdev_procs[0]), pName);
+    if (!fn) fn = lookup_proc(k_wsi_pdev_procs, sizeof(k_wsi_pdev_procs) / sizeof(k_wsi_pdev_procs[0]), pName);
     if (!fn) log_missing("GPDPA", pName);
     return fn;
 }

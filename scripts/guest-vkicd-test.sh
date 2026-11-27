@@ -38,7 +38,7 @@ ACC="$ANDROID_NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-androi
 # Stage guest source tree for proot glibc gcc build
 S=$OUT/src
 mkdir -p "$S"/{icd,client,transport,gen,genout,include}
-cp "$SRC"/icd/icd.c "$SRC"/icd/icd.map "$SRC"/icd/lodos_icd.json "$S/icd/"
+cp "$SRC"/icd/icd.c "$SRC"/icd/wsi_wayland.c "$SRC"/icd/icd.map "$SRC"/icd/lodos_icd.json "$S/icd/"
 cp "$SRC"/client/vkbc.[ch] "$S/client/"
 cp "$SRC"/transport/*.[ch] "$S/transport/"
 cp "$SRC/gen/vkb_wire.h" "$S/gen/"
@@ -51,7 +51,7 @@ gcc -std=c11 -O2 -g -Wall -Wextra -Werror -fPIC -shared \
     -Wl,--version-script=icd/icd.map \
     -I include -I gen -I genout -I client \
     icd/icd.c client/vkbc.c genout/vkb_rpc_common.c genout/vkb_rpc_client.c \
-    transport/ring.c transport/sock.c -lpthread -o libvulkan_lodos.so
+    transport/ring.c transport/sock.c -lpthread -ldl -o libvulkan_lodos.so
 mkdir -p /usr/lib/aarch64-linux-gnu /usr/share/vulkan/icd.d
 install -m 755 libvulkan_lodos.so "$ICD_LIB"
 install -m 644 icd/lodos_icd.json "$ICD_JSON"
