@@ -7,7 +7,7 @@ agy:~/.gemini/bin/agy -p "<task>" --model M --output-format json --dangerously-s
 models: default=gemini-4-neon-high | hard=gemini-4-carbon-high | trivial=gemini-4-neon-low
 rules: minimize claude tokens; never re-read chat history; this file = source of truth; daily checklist -> ~/Masaüstü/LodOS-YYYY-MM-DD.md
 orch: orch/run.sh loop(next todo task->agy->accept script->git commit; last attempt=carbon; max fail->blocked) | review.sh=claude -p checkpoint every 2 done/blocked or when queue empty (cooldown 1h on claude limit) | checklist.sh->desktop | tasks: orch/tasks/T###.md (FORMAT.md) accept: orch/accept/
-shutdown policy: agy quota -> claude implements (3h agy cooldown), then agy resumes; alternates forever | claude limit while agy out -> shutdown (waits if agy back <=90min) | no runnable work -> notify 5min w/ cancel -> systemctl poweroff | touch orch/NO_SHUTDOWN disables | phone battery <=15% (<=5% if charging) -> notify 2min w/ cancel, save, poweroff
+shutdown policy: implementer order agy -> codex (sandboxed workspace-write, 5h cooldown on quota) -> claude; touch orch/AGY_OFF or orch/CODEX_OFF to disable one | agy quota -> next implementer (3h agy cooldown), then agy resumes; alternates forever | claude limit while agy out -> shutdown (waits if agy back <=90min) | no runnable work -> notify 5min w/ cancel -> systemctl poweroff | touch orch/NO_SHUTDOWN disables | phone battery <=15% (<=5% if charging) -> notify 2min w/ cancel, save, poweroff
 phone keeper: lodos-phone.service (orch/phone/watch.sh) runs keeper.sh on phone: brightness 0 after 1min no input while work active; restores on input/unplug/screen-off; phone batt<=15% -> lock phone, stop runner, commit, poweroff PC
 sudo: none given; agents write NEEDS_ROOT in NOTES -> status user -> user runs cmd
 
@@ -115,6 +115,7 @@ P5 generalize + github + CI
 (live status: task files frontmatter)
 
 ## OPEN (need user)
+- 2026-11-27 22:05 USER: gemini weekly quota ~4% -> orch/AGY_OFF set, codex implements. Remove orch/AGY_OFF when gemini weekly quota resets.
 - 2026-11-27 21:30 COORD: T025-T028 set status:hold so T043 (phosh on phone) runs right after T051. After T043 finishes (done or failed), set T025-T028 back to status: todo.
 - 2026-11-27 USER: before GitHub release add (a) in-app bug-report/log collector (one button: logs+device info -> shareable file/issue template), (b) lite mode for 400-600k AnTuTu / 4-6GB devices (no animations, zram, smaller rootfs). Later Claude manages community (issues, contributors).
 - 2026-11-27 USER DIRECTIVE (game mode, after zink+game mode base): own open-source Vulkan layer "lodos-fg" (standalone repo-able, also works on desktop Linux). Features selectable in app settings + per-game: (1) FSR1+CAS spatial upscale, any game, presets quality/balanced/performance; (2) FSR2/FSR3 temporal upscale where game exposes it (OptiScaler-style DLSS/XeSS->FSR swap), prefer FSR3; (3) frame generation: generic (no motion vectors) via FidelityFX (MIT) optical flow + frame interpolation, Lossless-Scaling/AFMF-like, x2 target 30->60 on Mali; FSR3 FG where game provides MVs. No proprietary Lossless.dll in APK. Order: FSR1 layer (PC test) -> generic FG (PC) -> Mali perf tuning -> FSR2/3 path. Reviewer: split into tasks when game mode phase starts.

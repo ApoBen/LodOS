@@ -57,7 +57,12 @@ maybe_shutdown(){ # $1 reason
 }
 
 AGY_COOLDOWN=${AGY_COOLDOWN:-10800}
-agy_limited(){ [ -f "$S/agy_limited_until" ] && [ "$(date +%s)" -lt "$(cat "$S/agy_limited_until")" ]; }
+CODEX_COOLDOWN=${CODEX_COOLDOWN:-18000}
+CODEX=$HOME/.local/bin/codex
+# touch orch/AGY_OFF / orch/CODEX_OFF to disable an implementer manually
+agy_limited(){ [ -f "$O/AGY_OFF" ] || { [ -f "$S/agy_limited_until" ] && [ "$(date +%s)" -lt "$(cat "$S/agy_limited_until")" ]; }; }
+codex_limited(){ [ -f "$O/CODEX_OFF" ] || [ ! -x "$CODEX" ] || { [ -f "$S/codex_limited_until" ] && [ "$(date +%s)" -lt "$(cat "$S/codex_limited_until")" ]; }; }
+codex_quota(){ grep -qiE "usage limit|rate.?limit|quota|too many requests|\b429\b|purchase more credits|try again (at|in)" "$1"; }
 claude_limited(){ grep -qiE 'usage limit|limit reached|rate.?limit|out of (extra )?usage|resets? (at|in)' "$1" \
   && grep -qE '"is_error": *true' "$1"; }
 
@@ -78,15 +83,29 @@ $(tail -40 "$L/$id.accept.log")"
   prompt="You are a LodOS implementation agent. First read /mnt/SSD/LodOS/GEMINI.md (rules). Your task file: $f (attempt $att/$max). Do the task described in it. Acceptance is checked afterwards by: $acc
 $prev"
   out="$L/$id.a$att.json"
-  if agy_limited; then
-    log "RUN $id a$att implementer=claude (agy cooldown)"
+  if agy_limited && ! codex_limited; then
+    log "RUN $id a$att implementer=codex (agy off/cooldown)"
+    timeout 3h "$CODEX" exec -s workspace-write --skip-git-repo-check -C "$R" \
+       -c sandbox_workspace_write.network_access=true \
+       -c "sandbox_workspace_write.writable_roots=[\"$HOME/.cargo\",\"$HOME/.gradle\",\"$HOME/.cache\",\"/tmp\"]" \
+       "IMPLEMENTER MODE (runner): you implement this task yourself. $prompt" </dev/null >"$out" 2>&1
+    local crc=$?
+    if [ $crc -ne 0 ] && codex_quota "$out"; then
+      setf "$f" attempts "$((att-1))"; setf "$f" status todo
+      echo $(( $(date +%s) + CODEX_COOLDOWN )) > "$S/codex_limited_until"
+      log "codex quota (rc=$crc) -> next implementer for ${CODEX_COOLDOWN}s"; return 0
+    fi
+    log "CODEX $id a$att finished rc=$crc"
+  elif agy_limited; then
+    log "RUN $id a$att implementer=claude (agy+codex out)"
     timeout 3h claude -p "IMPLEMENTER MODE (runner): agy quota is out, you implement this task yourself. $prompt" \
        --output-format json --dangerously-skip-permissions >"$out" 2>&1
     if claude_limited "$out"; then
       setf "$f" attempts "$((att-1))"; setf "$f" status todo
-      local left=$(( $(cat "$S/agy_limited_until") - $(date +%s) ))
+      local left=99999; [ -f "$O/AGY_OFF" ] || left=$(( $(cat "$S/agy_limited_until" 2>/dev/null || echo 0) - $(date +%s) ))
+      [ -f "$S/codex_limited_until" ] && [ ! -f "$O/CODEX_OFF" ] && { local cl=$(( $(cat "$S/codex_limited_until") - $(date +%s) )); [ $cl -lt $left ] && left=$cl; }
       if [ "$left" -le 5400 ]; then log "claude limit; waiting ${left}s for agy"; sleep "$left"; return 0; fi
-      maybe_shutdown "Claude limiti doldu (agy de bitti)"
+      maybe_shutdown "Claude limiti doldu (agy+codex de bitti)"
     fi
     log "CLAUDE $id a$att finished"
   else
@@ -116,7 +135,7 @@ while true; do
   if f=$(next_task); then
     run_task "$f"
     if [ "$(cat "$S/since_review" 2>/dev/null || echo 0)" -ge "$REVIEW_EVERY" ]; then
-      review; [ $? -eq 2 ] && agy_limited && maybe_shutdown "Claude limiti doldu (agy de bitti)"
+      review; [ $? -eq 2 ] && agy_limited && codex_limited && maybe_shutdown "Claude limiti doldu (agy+codex de bitti)"
     fi
     continue
   fi
