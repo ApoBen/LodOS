@@ -6,7 +6,7 @@ PREFIX="$ROOT/build/mesa-pc/install"
 if [ ! -f "$PREFIX/lib/libEGL_mesa.so.0" ]; then
     "$ROOT/scripts/build-mesa-pc.sh"
 fi
-[ -f "$PREFIX/lib/libEGL.so.1" ] || { echo "private Mesa EGL missing at $PREFIX" >&2; exit 1; }
+[ -f "$PREFIX/lib/libEGL_mesa.so.0" ] || { echo "private Mesa EGL missing at $PREFIX" >&2; exit 1; }
 export LD_LIBRARY_PATH="$PREFIX/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 export LIBGL_DRIVERS_PATH="$PREFIX/lib/dri"
 export __EGL_VENDOR_LIBRARY_FILENAMES="$PREFIX/share/glvnd/egl_vendor.d/50_mesa.json"

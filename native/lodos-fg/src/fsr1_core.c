@@ -2,6 +2,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <math.h>
 #define A_CPU 1
 #include "../third_party/amd-fsr1/ffx_a.h"
 #include "../third_party/amd-fsr1/ffx_fsr1.h"
