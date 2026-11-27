@@ -130,6 +130,7 @@ static void *getproc(const char *name, void *ud) {
     return p;
 }
 
+#ifdef VKB_HAS_vkCreateDevice
 static void *getdevproc(const char *name, void *ud) {
     VkDevice dev = (VkDevice)ud;
     if (!dev || !g_gdpa) return NULL;
@@ -144,6 +145,7 @@ static void *getdevproc(const char *name, void *ud) {
     }
     return p;
 }
+#endif
 
 static void srv_install_wrappers(void);
 
