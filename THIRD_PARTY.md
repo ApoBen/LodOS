@@ -20,5 +20,6 @@ All third-party repositories cloned into `third_party/src/` (gitignored) or refe
 | `smithay` (crate) | `https://crates.io/crates/smithay` | `0.7.0` (Cargo.lock) | n/a (crates.io) | `MIT` | Yes | `native/lodos-wl` Wayland server (feature `wayland_frontend` only; pulls wayland-server 0.31.14, calloop 0.14.5, xkbcommon 0.8.0) |
 | `jni-sys` (crate) | `https://crates.io/crates/jni-sys` | `0.4.1` (Cargo.lock) | n/a (crates.io) | `MIT OR Apache-2.0` | Yes | JNI FFI type definitions for `native/lodos-wl` (`liblodos_wl.so`) |
 | `libxkbcommon` | `https://github.com/xkbcommon/libxkbcommon.git` | tag `xkbcommon-1.11.0` | `0f9cefb1fedb23433666fa5d9045e48ff030c006` | `MIT` (+MIT-style notices, see LICENSE) | Yes | Static lib for smithay wl_seat (xkbcommon crate); built by `scripts/build-xkbcommon.sh` -> `build/xkbcommon/arm64/lib/libxkbcommon.a` |
+| `libc` (crate) | `https://crates.io/crates/libc` | `0.2.191` (Cargo.lock) | n/a (crates.io) | `MIT OR Apache-2.0` | Yes | POSIX FFI (`waitpid`, `sigaction`, `prctl`, `kill`, `setuid`/`setgid`, `getpwnam`) for `native/lodos-init` |
 
 `bionic-vulkan-wrapper` LodOS build: `scripts/build-vk-layer.sh` applies `patches/bionic-vulkan-wrapper/0001-lodos-android-mali-build.patch` (no libdrm/X11/display WSI, adrenotools stub) -> `build/vk-layer/arm64/libvulkan_lodos_mali.so`.

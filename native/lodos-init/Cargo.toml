@@ -1,0 +1,26 @@
+[package]
+name = "lodos-init"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-3.0-or-later"
+description = "Minimal PID-1-ish supervisor and systemctl shim for LodOS proot guest (D3)"
+
+[lib]
+name = "lodos_init"
+path = "src/lib.rs"
+
+[[bin]]
+name = "lodos-init"
+path = "src/bin/lodos_init.rs"
+
+[[bin]]
+name = "systemctl"
+path = "src/bin/systemctl.rs"
+
+[dependencies]
+libc = "0.2"
+
+[profile.release]
+strip = true
+lto = true
+opt-level = "s"
