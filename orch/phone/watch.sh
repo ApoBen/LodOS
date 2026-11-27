@@ -4,7 +4,10 @@ D="adb -s <phone-serial>"; K=/mnt/SSD/LodOS/orch/phone/keeper.sh
 while true; do
   if $D get-state 2>/dev/null | grep -q device; then
     lvl=$($D shell dumpsys battery 2>/dev/null | sed -n 's/^ *level: *\([0-9]*\).*/\1/p' | head -1)
-    if [ -n "$lvl" ] && [ "$lvl" -le "${LOW_BATT:-15}" ] && systemctl --user is-active -q lodos.service; then
+    bst=$($D shell dumpsys battery 2>/dev/null | sed -n 's/^ *status: *\([0-9]*\).*/\1/p' | head -1)
+    # status 2=charging 5=full: on charger only act if critically low (still draining under load)
+    lim=${LOW_BATT:-15}; { [ "$bst" = 2 ] || [ "$bst" = 5 ]; } && lim=${LOW_BATT_CHG:-5}
+    if [ -n "$lvl" ] && [ "$lvl" -le "$lim" ] && systemctl --user is-active -q lodos.service; then
       R=/mnt/SSD/LodOS; L=$R/orch/logs/runner.log
       echo "$(date '+%F %T') PHONE BATTERY ${lvl}% -> lock phone, save, poweroff" >> $L
       $D shell 'rm -f /data/local/tmp/lodos/work; for p in $(pgrep -x keeper.sh); do kill $p; done' >/dev/null 2>&1
@@ -13,7 +16,11 @@ while true; do
       systemctl --user stop lodos.service
       cd $R && bash orch/checklist.sh >/dev/null 2>&1
       git -C $R add -A >/dev/null 2>&1; git -C $R commit -qm "phone battery ${lvl}%: state saved before poweroff" >/dev/null 2>&1
-      [ -f $R/orch/NO_SHUTDOWN ] || systemctl poweroff
+      if [ ! -f $R/orch/NO_SHUTDOWN ]; then
+        a=$(timeout 120 notify-send -u critical -w -A cancel=Iptal "LodOS" "Telefon pili %${lvl} (status ${bst}). 2 dk sonra PC kapanacak." 2>/dev/null)
+        [ "$a" = cancel ] && { echo "$(date '+%F %T') poweroff cancelled by user" >> $L; exit 0; }
+        systemctl poweroff
+      fi
       exit 0
     fi
     if systemctl --user is-active -q lodos.service; then
