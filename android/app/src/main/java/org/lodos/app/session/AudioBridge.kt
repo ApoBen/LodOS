@@ -14,6 +14,7 @@ class AudioBridge(
         const val EXECUTABLE = "liblodos_audio.so"
 
         fun argv(nativeLibDir: String): List<String> = listOf("$nativeLibDir/$EXECUTABLE")
+        fun socketPath(runDir: File): String = File(runDir, SOCKET_NAME).absolutePath
         fun env(socketPath: String): Map<String, String> = linkedMapOf(
             "LODOS_AUDIO_SOCK" to socketPath,
             "LODOS_AUDIO_RATE" to "48000",
@@ -28,9 +29,14 @@ class AudioBridge(
         if (process != null) return
         logsDir.mkdirs()
         runDir.mkdirs()
-        val socket = File(runDir, SOCKET_NAME)
+        val socket = File(socketPath(runDir))
         socket.delete()
         process = runner.start(argv(nativeLibDir), env(socket.absolutePath), File(logsDir, "audio.log")) { }
+        // Don't launch proot until the host has bound the path it will receive as a bind source.
+        repeat(50) {
+            if (socket.exists()) return
+            Thread.sleep(20)
+        }
     }
 
     @Synchronized fun stop() {

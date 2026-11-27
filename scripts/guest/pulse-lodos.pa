@@ -1,0 +1,4 @@
+# LodOS audio v0: pulse PCM FIFO -> socat relay -> host AAudio socket.
+load-module module-pipe-sink file=/run/lodos/pulse/sink.fifo sink_name=lodos format=s16le rate=48000 channels=2 use_system_clock_for_timing=yes
+load-module module-native-protocol-unix socket=/run/lodos/pulse/native.sock auth-anonymous=1
+load-module module-suspend-on-idle timeout=1
