@@ -159,10 +159,10 @@ class DisplayActivity : Activity(), SurfaceHolder.Callback {
                     cmd = listOf("/bin/sh", "-lc", """
                         set -e
                         mkdir -p /etc/apt/apt.conf.d /etc/dpkg/dpkg.cfg.d
-                        printf '%s\\n' 'APT::Sandbox::User \"root\";' 'APT::Install-Recommends \"false\";' > /etc/apt/apt.conf.d/01lodos
-                        printf '%s\\n' 'force-unsafe-io' > /etc/dpkg/dpkg.cfg.d/01lodos
+                        printf '%s\n' 'APT::Sandbox::User \"root\";' 'APT::Install-Recommends \"false\";' > /etc/apt/apt.conf.d/01lodos
+                        printf '%s\n' 'force-unsafe-io' > /etc/dpkg/dpkg.cfg.d/01lodos
                         if [ -L /etc/resolv.conf ] || ! grep -q '^nameserver' /etc/resolv.conf 2>/dev/null; then
-                          rm -f /etc/resolv.conf; printf 'nameserver 8.8.8.8\\nnameserver 1.1.1.1\\n' > /etc/resolv.conf
+                          rm -f /etc/resolv.conf; printf 'nameserver 8.8.8.8\nnameserver 1.1.1.1\n' > /etc/resolv.conf
                         fi
                         if ! command -v weston-simple-shm >/dev/null 2>&1; then apt-get update -q && apt-get install -y -q --no-install-recommends weston; fi
                         timeout 5s weston-simple-shm
