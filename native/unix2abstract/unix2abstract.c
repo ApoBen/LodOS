@@ -27,6 +27,29 @@ static int rewrite(const void *a, socklen_t len, struct sockaddr_un *out, sockle
   while (n < sizeof(u->sun_path) - 1 && n + 2 < len && u->sun_path[n]) n++;
   out->sun_family = AF_UNIX;
   out->sun_path[0] = 0;
+  // The Android lodos-wl listener uses @lodos-<basename>; let nested wlroots
+  // connect through the same name when its host runtime path is shimmed.
+  if (n >= 10 && u->sun_path[n - 10] == '/' &&
+      u->sun_path[n - 9] == 'w' && u->sun_path[n - 8] == 'a' &&
+      u->sun_path[n - 7] == 'y' && u->sun_path[n - 6] == 'l' &&
+      u->sun_path[n - 5] == 'a' && u->sun_path[n - 4] == 'n' &&
+      u->sun_path[n - 3] == 'd' && u->sun_path[n - 2] == '-' &&
+      u->sun_path[n - 1] == '0') {
+    const char *name = "lodos-wayland-0";
+    for (i = 0; i < 15; i++) out->sun_path[i + 1] = name[i];
+    *olen = 2 + 1 + 15;
+    return 1;
+  }
+  if (n >= 9 && u->sun_path[n - 9] == '/' &&
+      u->sun_path[n - 8] == 'l' && u->sun_path[n - 7] == 'o' &&
+      u->sun_path[n - 6] == 'd' && u->sun_path[n - 5] == 'o' &&
+      u->sun_path[n - 4] == 's' && u->sun_path[n - 3] == '-' &&
+      u->sun_path[n - 2] == 'w' && u->sun_path[n - 1] == 'l') {
+    const char *name = "lodos-lodos-wl";
+    for (i = 0; i < 14; i++) out->sun_path[i + 1] = name[i];
+    *olen = 2 + 1 + 14;
+    return 1;
+  }
   for (i = 0; i < n; i++) out->sun_path[i + 1] = u->sun_path[i];
   *olen = (socklen_t)(2 + 1 + n);
   return 1;

@@ -92,3 +92,9 @@
 - grid launch: fresh session shows "mobile friendly" only (foot hidden) -> tap "Show All Apps" once; then tap search (y 0.045), type name, tap 1st cell (0.07,0.091); search clears after launch. GTK4 apps get keyboard via lodos-wl ctl `key`.
 - close: foot/calculator exit on foreign-toplevel close (<1s); text-editor with unsaved draft shows a save dialog -> driver falls back to SIGTERM after 6s.
 - comm names truncate to 15 chars (`gnome-calculato`): `pgrep -x gnome-calculator` never matches; use the 15-char comm or tracked pids.
+
+## T043: phone phosh nested on lodos-wl headless
+- `scripts/phone-desktop.sh` builds the aarch64 Android `lodos-wl --features headless`, installs the phosh guest package set in the phone trixie rootfs, runs pixman phoc/phosh, then pulls the framebuffer into `docs/screens/T043-phone-phosh.png` (720x1600). The result is the phosh lockscreen.
+- Android shell uid cannot create pathname sockets under `/data/local/tmp/lodos/run`: `Permission denied`. lodos-wl continues on abstract `@lodos-lodos-wl`; no root workaround was used. `libunix2abstract.so` maps the guest's `/run/host-xdg/lodos-wl` connection to that abstract name. Phoc's own `wayland-0` uses a separate abstract name, while the u2a and elogind shims handle guest socket/netlink restrictions.
+- xkbcommon is built with `xkb-config-root=/data/local/tmp/lodos/rootfs/debian/usr/share/X11/xkb` so the Android host binary reads the guest's installed `xkb-data` files. Its regular Android `/usr/share/X11/xkb` default does not exist.
+- Timing from the run: phosh logged `Phosh ready after 1.13s`; lodos-wl had a mapped toplevel and PPM dump. Total runner wall time was about 11s. Cleanup stopped lodos-wl and the phone guest daemons; `pgrep -x phoc`, `phosh`, `elogind`, and `dbus-daemon` returned no processes.
