@@ -1,7 +1,14 @@
 #!/usr/bin/env bash
 # PC side: while lodos.service is active and phone is attached, keep keeper.sh running on phone and refresh the work flag.
 D="adb -s <phone-serial>"; K=/mnt/SSD/LodOS/orch/phone/keeper.sh
+AQ=/mnt/SSD/LodOS/orch/state/agy_limited_until; AQN=/mnt/SSD/LodOS/orch/state/agy_quota_notified
 while true; do
+  # agy quota ran out (new cooldown written) -> tell user once so they can switch Gemini account themselves
+  if [ -f "$AQ" ] && [ ! -f /mnt/SSD/LodOS/orch/AGY_OFF ] && [ "$(cat "$AQ")" != "$(cat "$AQN" 2>/dev/null)" ] && [ "$(date +%s)" -lt "$(cat "$AQ")" ]; then
+    cat "$AQ" > "$AQN"
+    notify-send -u critical -a LodOS "LodOS: agy (Gemini) kotası bitti" "İş Codex/Grok'a geçti. Başka hesapla agy'ye giriş yapınca: rm /mnt/SSD/LodOS/orch/state/agy_limited_until" 2>/dev/null
+    echo "$(date '+%F %T') NOTIFY agy quota -> user" >> /mnt/SSD/LodOS/orch/logs/runner.log
+  fi
   if $D get-state 2>/dev/null | grep -q device; then
     lvl=$($D shell dumpsys battery 2>/dev/null | sed -n 's/^ *level: *\([0-9]*\).*/\1/p' | head -1)
     bst=$($D shell dumpsys battery 2>/dev/null | sed -n 's/^ *status: *\([0-9]*\).*/\1/p' | head -1)
