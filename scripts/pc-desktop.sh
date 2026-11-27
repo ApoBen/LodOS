@@ -51,6 +51,14 @@ if [ "$MODE" != foot ] && ! [ -e "$RFS/usr/share/glib-2.0/schemas/org.gnome.sett
   log "guest missing gnome-settings-daemon-common (phosh aborts without it) -> pc-guest.sh setup"
   bash scripts/pc-guest.sh setup >&2
 fi
+if [ "$MODE" = xwayland ] && ! bash scripts/pc-guest.sh run /bin/sh -c '
+  for p in xwayland xterm x11-apps; do
+    dpkg -s "$p" 2>/dev/null | grep -q "^Status: install ok installed" || exit 1
+  done
+'; then
+  log "guest missing Xwayland/X11 packages -> pc-guest.sh setup"
+  bash scripts/pc-guest.sh setup >&2
+fi
 
 log "building lodos-wl (headless)"
 (cd native/lodos-wl && cargo build --release --features headless -q)

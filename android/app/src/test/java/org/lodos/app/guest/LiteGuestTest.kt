@@ -9,7 +9,7 @@ import org.junit.Test
 import org.lodos.app.lite.LiteMode
 import org.lodos.app.lite.Tier
 
-class GuestLaunchLiteTest {
+class LiteGuestTest {
     private val rootfs = Files.createTempDirectory("lite-rootfs").toFile().absolutePath
     private val paths get() = GuestPaths("/nlib", Files.createTempDirectory("lite-files").toFile().absolutePath,
         rootfs, "/run", "/tmp")
