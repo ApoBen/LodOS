@@ -4,6 +4,7 @@ import android.app.Activity
 import android.content.Intent
 import android.content.ComponentName
 import android.content.ServiceConnection
+import android.content.pm.ApplicationInfo
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
@@ -98,7 +99,8 @@ class SetupActivity : Activity() {
         sessionStartButton = findViewById(R.id.setup_btn_session_start)
         sessionStopButton = findViewById(R.id.setup_btn_session_stop)
 
-        repo = if (BuildConfig.DEBUG && intent.getStringExtra("fake_repo") == "1") {
+        val isDebuggable = (applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE) != 0
+        repo = if (isDebuggable && intent.getStringExtra("fake_repo") == "1") {
             FakeRootfsRepo(initiallyInstalled = isRootfsPresentOnDisk(), stepDelayMs = 150L)
         } else HttpRootfsRepo(this)
         val store = SharedPreferencesSetupStore(

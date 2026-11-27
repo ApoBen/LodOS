@@ -42,7 +42,9 @@ cp "$SRC"/icd/icd.c "$SRC"/icd/wsi_wayland.c "$SRC"/icd/icd.map "$SRC"/icd/lodos
 cp "$SRC"/client/vkbc.[ch] "$S/client/"
 cp "$SRC"/transport/*.[ch] "$S/transport/"
 cp "$SRC/gen/vkb_wire.h" "$S/gen/"
-cp "$GEN"/*.[ch] "$S/genout/"
+# rpcgen also emits the ICD dispatch table as a .inc included by icd.c.
+# Stage the full generated directory so the guest build has every output.
+cp -a "$GEN"/. "$S/genout/"
 cp -r "$VKH/include/vulkan" "$VKH/include/vk_video" "$S/include/"
 cat > "$S/build.sh" <<EOF
 set -e
