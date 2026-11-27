@@ -6,3 +6,5 @@ LodOS checkpoint review (headless, coordinator role). Be token-frugal: do NOT re
 5. Update ai.md: TASKS (one line each), DECISIONS (new only), RISKS, LOG (one line). Terse, AI-oriented.
 6. Never implement large code yourself; delegate via tasks. Do not edit orch/*.sh unless broken.
 Finish with a one-line summary.
+
+Parallelism (since 2026-11-27): runner runs up to 3 lanes. Tasks never overlap when they share a resource: phone (needs_phone/adb), gradle (android build), pcdisplay (lodos-wl/phoc/phosh on PC). To use the lanes, keep 2+ runnable tasks queued that do NOT share these: e.g. one phone task + one android/gradle task + one pure PC task (Rust/vk-bridge/scripts/docs/research). Split big work into such independent tasks.

@@ -15,19 +15,32 @@ field(){ sed -n "s/^$2: *//p" "$1" | head -1; }
 setf(){ sed -i "0,/^$2:.*/s//$2: $3/" "$1"; }
 phone_ok(){ adb -s "$PHONE" get-state 2>/dev/null | grep -q device; }
 checklist(){ bash "$O/checklist.sh" >/dev/null 2>&1; }
-commit(){ git add -A >/dev/null 2>&1; git commit -qm "$1" >/dev/null 2>&1 || true; }
+commit(){ ( flock 8; git add -A >/dev/null 2>&1; git commit -qm "$1" >/dev/null 2>&1 || true ) 8>"$S/git.lock"; }
 
 deps_done(){ # $1 task file
   local d; for d in $(field "$1" deps | tr ',' ' '); do
     [ "$(field "$T/$d.md" status)" = done ] || return 1; done; return 0; }
 
+LANES=${LANES:-3}   # parallel task lanes; phone/gradle/pc-display tasks never overlap
+RUN_D=$S/running
+# resources a task needs exclusively (from needs_phone + its accept script)
+task_res(){ local f=$1 a; a=$(field "$f" accept)
+  [ "$(field "$f" needs_phone)" = yes ] && echo phone
+  grep -qs 'adb' "$R/$a" && echo phone
+  grep -qs 'gradlew' "$R/$a" && echo gradle
+  grep -qsE 'lodos-wl|phoc|phosh|pc-desktop|pc-guest|wayland' "$R/$a" "$f" && echo pcdisplay
+  true; }
+res_busy(){ local r; for r in $(task_res "$1" | sort -u); do grep -qsx "$r" "$RUN_D"/* && return 0; done; return 1; }
+
 next_task(){
-  local f st
+  local f st id
   for st in doing todo; do
     for f in $(ls "$T"/T*.md 2>/dev/null | sort); do
       [ "$(field "$f" status)" = "$st" ] || continue
+      id=$(basename "$f" .md); [ -e "$RUN_D/$id" ] && continue
       deps_done "$f" || continue
       if [ "$(field "$f" needs_phone)" = yes ] && ! phone_ok; then continue; fi
+      res_busy "$f" && continue
       echo "$f"; return 0
     done
   done
@@ -141,20 +154,31 @@ $prev"
   else
     setf "$f" status todo; log "FAIL $id a$att"; commit "$id: wip a$att"; return 0
   fi
-  echo $(( $(cat "$S/since_review" 2>/dev/null || echo 0) + 1 )) > "$S/since_review"
+  ( flock 8; echo $(( $(cat "$S/since_review" 2>/dev/null || echo 0) + 1 )) > "$S/since_review" ) 8>"$S/count.lock"
 }
 
-log "runner start"
+log "runner start (lanes=$LANES)"
+rm -rf "$RUN_D"; mkdir -p "$RUN_D"
+declare -A PIDS
+lane(){ # run one task in background; resource claim file removed on exit
+  local f=$1 id; id=$(basename "$f" .md)
+  task_res "$f" | sort -u > "$RUN_D/$id"
+  ( run_task "$f"; rm -f "$RUN_D/$id" ) &
+  PIDS[$id]=$!; log "LANE start $id pid=$! res=$(tr '\n' ',' < "$RUN_D/$id")"
+}
+reap(){ local id; for id in "${!PIDS[@]}"; do
+  kill -0 "${PIDS[$id]}" 2>/dev/null || { wait "${PIDS[$id]}" 2>/dev/null; unset "PIDS[$id]"; rm -f "$RUN_D/$id"; }; done; }
 while true; do
-  checklist
-  if f=$(next_task); then
-    run_task "$f"
-    if [ "$(cat "$S/since_review" 2>/dev/null || echo 0)" -ge "$REVIEW_EVERY" ]; then
-      review; [ $? -eq 2 ] && agy_limited && codex_limited && grok_limited && maybe_shutdown "Claude limiti doldu (agy+codex+grok de bitti)"
-    fi
+  reap; checklist
+  started=0
+  while [ "${#PIDS[@]}" -lt "$LANES" ] && f=$(next_task); do lane "$f"; started=1; sleep 5; done
+  if [ "$(cat "$S/since_review" 2>/dev/null || echo 0)" -ge "$REVIEW_EVERY" ] && [ "$(date +%s)" -ge "${NEXT_REVIEW_TRY:-0}" ]; then
+    NEXT_REVIEW_TRY=$(( $(date +%s) + 900 ))   # failed/limited review retried at most every 15 min
+    review; [ $? -eq 2 ] && agy_limited && codex_limited && grok_limited && [ "${#PIDS[@]}" -eq 0 ] && maybe_shutdown "Claude limiti doldu (agy+codex+grok de bitti)"
     continue
   fi
-  # nothing runnable: let Claude plan more work
+  if [ "${#PIDS[@]}" -gt 0 ] || [ $started = 1 ]; then sleep 30; continue; fi
+  # nothing running and nothing runnable: let Claude plan more work
   review; rc=$?
   next_task >/dev/null && continue
   if [ $rc -eq 2 ]; then maybe_shutdown "is yok, Claude limiti dolu"; fi
