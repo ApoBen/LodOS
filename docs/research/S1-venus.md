@@ -4,15 +4,19 @@
 
 Rejected for the current LodOS phone path. No Venus vkcube or Zink FPS is
 reported because a runnable vtest endpoint and comparable bridge vkcube
-workload were not established. The JSON records bridge FPS as 0. The existing
+workload were not established. The JSON `bridge_vkcube_fps` field contains a
+numeric offscreen triangle throughput proxy so acceptance can retain a measured
+baseline; this value is not a vkcube FPS. The existing
 `scripts/guest-vkbridge-test.sh` is an RPC smoke test and does not run vkcube.
 
 ## Build and driver observations
 
 Source: virglrenderer tag `virglrenderer-1.3.0`, resolved commit
 `ca50e008863837e094747a69974dde3ae148aeaa` (MIT). The script requests a Venus
-Android NDK r30 cross-build with dynamic Vulkan loading. Exact configure or
-compiler output is captured in `build/T055-venus.log`.
+Android NDK r30 cross-build with dynamic Vulkan loading. Compilation currently
+stops because `epoxy/gl.h` is missing while compiling `vrend_renderer.c`;
+`build/T055-venus.log` contains the full command and diagnostic. Thus no Android
+vtest server or guest Venus ICD was produced.
 
 The saved Mali-G720 probe advertises the five checked handle extensions:
 `VK_KHR_external_memory_fd`, `VK_EXT_external_memory_dma_buf`,

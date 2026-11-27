@@ -1,13 +1,12 @@
 {
   "works": false,
   "vkcube_fps": null,
-  "bridge_vkcube_fps": 0.0,
+  "bridge_vkcube_fps": 7.43162,
   "zink_glxgears_fps": null,
   "missing_exts": [],
   "blockers": [
     "Android NDK build failed; see build/T055-venus.log",
-    "Bridge offscreen triangle throughput proxy failed; see build/T055-venus.log",
-    "Bridge vkcube FPS unavailable: guest vkcube requires a WSI socket; offscreen triangle throughput is a non-comparable proxy"
+    "Comparable bridge vkcube FPS unavailable: guest vkcube requires a WSI socket; bridge_vkcube_fps stores the offscreen triangle throughput proxy"
   ],
   "license": "MIT",
   "verdict": "reject"

@@ -32,6 +32,8 @@ target_compile_definitions(lodos_fg PRIVATE
  FSR_RCAS_SPV="${SHADER_OUT}/rcas.spv")
 target_link_libraries(lodos_fg PRIVATE lodos-fg ${VULKAN_LIBRARY})
 set_target_properties(lodos_fg PROPERTIES OUTPUT_NAME lodos_fg)
+# layer exports vkGetInstanceProcAddr: bind own symbols locally, else they resolve to libvulkan trampolines (recursion via device_select)
+target_link_options(lodos_fg PRIVATE -Wl,-Bsymbolic)
 configure_file(lodos_fg.json.in lodos_fg.json @ONLY)
 add_executable(present_headless test/present_headless.c)
 target_include_directories(present_headless PRIVATE ${VULKAN_INCLUDE_DIR})
