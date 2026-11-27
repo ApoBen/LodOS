@@ -1,4 +1,25 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">LodOS</string>
+    <string name="setup_step_welcome">Step 1 of 3 · Welcome</string>
+    <string name="setup_step_rootfs">Step 2 of 3 · Linux Rootfs</string>
+    <string name="setup_step_start">Step 3 of 3 · Ready</string>
+    <string name="setup_welcome_title">Welcome to LodOS</string>
+    <string name="setup_welcome_body">Run a full rootless Debian Linux desktop on Android with GPU acceleration and Wayland display support.</string>
+    <string name="setup_rootfs_title">Prepare Linux Rootfs</string>
+    <string name="setup_rootfs_body">Download, verify, and extract the Debian ARM64 root filesystem into app storage.</string>
+    <string name="setup_start_title">Ready to Launch</string>
+    <string name="setup_start_body">Your Linux environment is ready. Start the Wayland display session to enter LodOS.</string>
+    <string name="setup_status_missing">Status: Not installed</string>
+    <string name="setup_status_downloading">Status: Downloading (%1$d%%)</string>
+    <string name="setup_status_extracting">Status: Extracting (%1$d%%)</string>
+    <string name="setup_status_ready">Status: Ready (100%%)</string>
+    <string name="setup_status_error">Status: Error</string>
+    <string name="setup_btn_back">Back</string>
+    <string name="setup_btn_continue">Continue</string>
+    <string name="setup_btn_install">Install Rootfs</string>
+    <string name="setup_btn_installing">Installing…</string>
+    <string name="setup_btn_retry">Retry</string>
+    <string name="setup_btn_start">Start LodOS</string>
+    <string name="setup_btn_native_info">Native Info</string>
 </resources>
