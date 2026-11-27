@@ -44,7 +44,7 @@ D10 own repo of custom builds (mesa/zink, bridge, box64, fex, wine, dxvk)
 real systemd; flatpak/snap/docker/podman (no userns); kernel anticheat; VA-API hw decode; raw sockets/<1024 ports/vpn/kmods; direct usb/bt; 16K-page devices problematic (future)
 
 ## RISKS
-R1 mali vulkan bridge glibc<->bionic (boundary proven T019; remaining: full API surface/pNext/memory) | R2 mali lacks BCn etc -> transcode | R3 own wayland host (shm CPU path ok T022; zero-copy AHB/dmabuf pending) | R4 mutter can't nest in wayland -> headless+pipewire or patch | R5 fex under proot | R6 phantom process killer -> onboarding guide | R7 HyperOS blocks 1st adb install (guardprovider missing; manual 1st install worked) -> end users may hit MIUI restrictions | R8 app-uid: nativeLibDir exec + dma_heap ok (T017/T020) CLOSED | R10 proot rootfs+apt at app uid OK (T020) CLOSED; first-run extract 1.95s native (T026) CLOSED | R11 Mali DMA_BUF export broken (getMemoryFd fd=-1) -> export only via AHB; dma_heap ok at app uid | R12 vk-layer ICD handles (loader magic) -> bridge must use vk_icdGetInstanceProcAddr; libcutils non-NDK (T014) | R13 shell uid can't bind path AF_UNIX (SELinux); app uid OK (T017) -> abstract/unix2abstract only for adb spikes | R17 bridge mapped mem = memfd shadow + memcpy sync on flush/submit/wait (T029) -> perf cost for big buffers; later AHB-backed zero-copy | R14 ring spin vs futex: short spin -> 100x latency; need adaptive spin/per-thread tuning (power) | R15 proot cgroup2 ro -> elogind no sessions/polkit (T025) | R18 lodos-init guest musl static built (T039 CLOSED-ish; aarch64 run untested) | R19 phoc nests w/o new protocols (T037 CLOSED-ish); phoc ignores request_state resize -> mode pinned via phoc.ini | R16 phone adb drops on PC suspend/resume -> phone tasks stall | R20 zink over ICD: 354 GDPA misses (T041); no WSI in bridge -> T047 guest-side WSI (readback+wl_shm v0, AHB zero-copy later) | R22 phosh gestures in wlctl are fixed fractions @720x1600 phosh 0.46; keypad auto-hides (T042) | R21 rootless => no zram for lite mode; use smaller rootfs/mem limits | R23 ICD WSI v0: 2 CPU copies/frame + sync present + no OUT_OF_DATE/resize (T047) -> AHB zero-copy later | R25 mesa wayland EGL needs DRM render node in dmabuf feedback for kopper (T051); phone proot has no /dev/dri -> custom mesa/kopper patch (D10) | R24 audio guest relay = socat stopgap (T049); replace w/ tiny static relay | R9 lxc rootfs URLs rotate ~3d -> fetch script resolves latest; pin own mirror for release
+R1 mali vulkan bridge glibc<->bionic (boundary proven T019; remaining: full API surface/pNext/memory) | R2 mali lacks BCn etc -> transcode | R3 own wayland host (shm CPU path ok T022; zero-copy AHB/dmabuf pending) | R4 mutter can't nest in wayland -> headless+pipewire or patch | R5 fex under proot | R6 phantom process killer -> onboarding guide | R7 HyperOS blocks 1st adb install (guardprovider missing; manual 1st install worked) -> end users may hit MIUI restrictions | R8 app-uid: nativeLibDir exec + dma_heap ok (T017/T020) CLOSED | R10 proot rootfs+apt at app uid OK (T020) CLOSED; first-run extract 1.95s native (T026) CLOSED | R11 Mali DMA_BUF export broken (getMemoryFd fd=-1) -> export only via AHB; dma_heap ok at app uid | R12 vk-layer ICD handles (loader magic) -> bridge must use vk_icdGetInstanceProcAddr; libcutils non-NDK (T014) | R13 shell uid can't bind path AF_UNIX (SELinux); app uid OK (T017) -> abstract/unix2abstract only for adb spikes | R17 bridge mapped mem = memfd shadow + memcpy sync on flush/submit/wait (T029) -> perf cost for big buffers; later AHB-backed zero-copy | R14 ring spin vs futex: short spin -> 100x latency; need adaptive spin/per-thread tuning (power) | R15 proot cgroup2 ro -> elogind no sessions/polkit (T025) | R18 lodos-init guest musl static built (T039 CLOSED-ish; aarch64 run untested) | R19 phoc nests w/o new protocols (T037 CLOSED-ish); phoc ignores request_state resize -> mode pinned via phoc.ini | R16 phone adb drops on PC suspend/resume -> phone tasks stall | R20 zink over ICD: 354 GDPA misses (T041); no WSI in bridge -> T047 guest-side WSI (readback+wl_shm v0, AHB zero-copy later) | R22 phosh gestures in wlctl are fixed fractions @720x1600 phosh 0.46; keypad auto-hides (T042) | R21 rootless => no zram for lite mode; use smaller rootfs/mem limits | R23 ICD WSI v0: 2 CPU copies/frame + sync present + no OUT_OF_DATE/resize (T047) -> AHB zero-copy later | R25 mesa wayland EGL needs DRM render node in dmabuf feedback for kopper (T051); phone proot has no /dev/dri -> custom mesa/kopper patch (D10) | R24 audio guest relay = socat stopgap (T049); replace w/ tiny static relay | R26 parallel lanes: runner commits with add -A -> one lane's files land in another task's commit (T052 code in 'T027: blocked'); history attribution only, not data loss | R9 lxc rootfs URLs rotate ~3d -> fetch script resolves latest; pin own mirror for release
 
 ## PHASES
 P0 spikes: S1 mali bridge vkcube+zink glxgears | S2 wayland host+nested phoc+zero-copy | S3 phosh/gnome48 w/ elogind+mini-init (+test systemd --user standalone) | S4 box64+wine arm64ec in proot, Hades
@@ -80,9 +80,9 @@ P5 generalize + github + CI
 [x] T022 S2 v0: lodos-wl JNI->SurfaceView, wl_shm green ok; CPU copy 512² ~1.5-2ms, 60fps vsync
 [x] T023 S1 guest ICD v0: vulkaninfo --summary shows Mali-G720 (35 cmds, 119 calls); GDPA cmds missing
 [x] T024 S4 box64 0.3.4 in proot: hello/bash ok, bench native 216ms vs box64 801ms (BOX64_LOG>=1 breaks wide stdout)
-[ ] T025 S3 sessions: fake cgroup2 shim -> session id ok (a2), Inhibit FileNotFound; a3 shim untested -> reopened carbon max5, debug ENOENT path, timeboxed (park if a4 fails)
+[P] T025 S3 sessions PARKED (status user): session id ok, Inhibit FileNotFound (.ref FIFO); phosh fine w/o it; revisit P1 polish
 [x] T026 P1 native rootfs extract via JNI lodos-rootfs at app uid: 199s -> 1.95s cold; apt+hello ok, total 37s (codex)
-[ ] T027 S1 v1: guest compute+offscreen triangle via bridge, shared mapped mem, batched cmdbufs (carbon)
+[ ] T027 S1 v1: guest compute+triangle via bridge on phone; a3 failed on clock_gettime/-std=c11 (reviewer fixed); batching moved to T058; max6
 [ ] T028 S2 v1: app-uid proot guest wl_shm client (weston-simple-shm) -> DisplayActivity (neon)
 [x] T029 S1 ICD 92 cmds, memfd-shadow mapped mem, PC-host compute e2e via ICD on Intel Arc OK
 [x] T030 P1 wizard skeleton: SetupStateMachine+RootfsInstaller(fake repo)+SetupActivity, 11 JVM tests
@@ -107,15 +107,18 @@ P5 generalize + github + CI
 [x] T049 native/lodos-audio (wav+AAudio backend, 6 tests); guest pulse module-pipe-sink->socat->host sock, 440Hz PASS (claude-impl)
 [x] T050 phosh app smoke foot/text-editor/calculator PNGs (calc 6x7=42 verified), ctl toplevels, wlrctl close (claude-impl)
 [x] T051 zink GL eglgears on lodos-wl via ICD WSI (Arc), 120f PNG verified; needs dmabuf feedback+render node -> phone needs custom mesa (codex)
-[ ] T052 P1 session UI Start/Stop + POST_NOTIFICATIONS + SessionUiModel tests (neon, no phone)
+[x] T052 session UI Start/Stop + POST_NOTIFICATIONS + SessionUiModel, 6 JVM tests (codex)
 [ ] T053 P1 lite mode wired into GuestLaunch/SessionController (neon, no phone)
 [ ] T054 P1 audio in APK: liblodos_audio.so + AudioBridge in FGS + guest pulse snippet (neon, no phone)
 [ ] T055 S1-alt Venus+virglrenderer vtest on phone vs vk-bridge (neon, phone, after T043)
 [ ] T056 S1-alt in-process Vulkan wrapper ICD on phone vs vk-bridge (neon, phone, after T043)
 [ ] T057 P1 "Linux Terminal" 2nd launcher icon: TerminalActivity (termux terminal libs) -> guest bash PTY, no phosh (neon, phone)
+[ ] T058 S1 vk-bridge vkCmd* batching per cmdbuf, PC host Arc, calls batched<unbatched (carbon, pure PC)
+[ ] T059 audio: static Rust lodos-audio-relay replaces socat (R24) (neon, pure PC)
 (live status: task files frontmatter)
 
 ## OPEN (need user)
+- 2026-11-27 review26: T025 (elogind Inhibit) parked as status:user — no action needed; say if you want it prioritized before P1 polish.
 - 2026-11-27 GitHub: private repo https://github.com/ApoBen/LodOS (remote origin, branch master). Before making it public: rewrite author email to noreply, phone serial -> env var, drop personal notes (host sleep timer) from ai.md, add GPL-3.0 LICENSE + README.
 - 2026-11-27 22:05 USER: gemini weekly quota ~4% -> orch/AGY_OFF set, codex implements. Remove orch/AGY_OFF when gemini weekly quota resets.
 - 2026-11-27 USER: before GitHub release add (a) in-app bug-report/log collector (one button: logs+device info -> shareable file/issue template), (b) lite mode for 400-600k AnTuTu / 4-6GB devices (no animations, zram, smaller rootfs). Later Claude manages community (issues, contributors).
@@ -126,6 +129,7 @@ P5 generalize + github + CI
 (none)
 
 ## LOG (newest first, 1 line each)
+2026-11-27 review26: T052 ok (accept PASS, 6 JVM tests); T027 blocked=guest compile err (fixed _POSIX_C_SOURCE) -> todo max6 scope narrowed; T025 parked (user); +T058 cmd batching, T059 audio relay (pure-PC lanes); R26
 2026-11-27 review25: T026 ok (accept PASS: native extract 1952ms vs 199s); T025 blocked a3 (shim untested on device) -> todo carbon max5 w/ REVIEW debug hints; queue 8 todo, phone on adb
 2026-11-27 review24: T043 ok (FIRST PHONE DESKTOP: phosh lockscreen PNG on POCO), T051 ok (zink eglgears via ICD WSI PNG); T025-T028 hold->todo; R25
 2026-11-27 review23: T049,T050 ok (accept PASS; 440Hz wav; calc PNG verified); phone off adb; +T053 lite wiring, T054 audio in APK (PC-only); R24

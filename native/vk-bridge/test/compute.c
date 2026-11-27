@@ -1,3 +1,4 @@
+#define _POSIX_C_SOURCE 199309L
 /* T029 PC-host e2e compute client via Khronos Vulkan Loader -> libvulkan_lodos.so -> vk-bridge -> host ICD.
  * Verifies GDPA coverage for compute entrypoints and dispatches a compute shader doubling 1M uint32s
  * across host->device CopyBuffer + PipelineBarrier + Compute Dispatch + device->host CopyBuffer + Fence. */
