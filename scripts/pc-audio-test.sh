@@ -47,12 +47,12 @@ for _ in $(seq 50); do [ -S "$SOCKDIR/audio.sock" ] && break; sleep 0.1; done
 
 # guest: pulse (no default.pa) with pipe-sink paced by system clock; suspend-on-idle -> no traffic when idle
 if [ "$RELAY_MODE" = native ]; then
-  EXTRA_BINDS="-b $SOCKDIR:/run/lodos-audio -b $ROOT/build/audio-relay/x86_64/lodos-audio-relay:/usr/lib/lodos/lodos-audio-relay"
+  EXTRA_BINDS="-b $SOCKDIR:/run/lodos-audio -b $ROOT/build/audio-relay/x86_64:/run/lodos-audio-bin"
 else
   EXTRA_BINDS="-b $SOCKDIR:/run/lodos-audio"
 fi
 if [ "$RELAY_MODE" = native ]; then
-  GUEST_RELAY=/usr/lib/lodos/lodos-audio-relay
+  GUEST_RELAY=/run/lodos-audio-bin/lodos-audio-relay
 else
   GUEST_RELAY=/not-installed/lodos-audio-relay
 fi

@@ -11,7 +11,7 @@ data class RootfsSpec(
 
 /**
  * Abstraction over rootfs download, SHA-256 verification, and extraction.
- * Real implementation arrives with native extraction (T026).
+ * Implementations provide download, checksum verification, and extraction.
  */
 interface RootfsRepo {
     fun isInstalled(): Boolean
