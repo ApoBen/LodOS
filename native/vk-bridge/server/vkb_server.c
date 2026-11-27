@@ -1,8 +1,8 @@
-/* vk-bridge server v0: listens on abstract AF_UNIX @lodos-vk (R13: shell uid can't bind path sockets),
+/* vk-bridge server v0/v1: listens on AF_UNIX @lodos-vk (R13: shell uid can't bind path sockets),
  * one thread per client. Client sends "VKB1" + 2 ring fds (c2s, s2c); server loops
  * ring_pop -> vkr_srv_dispatch (decode, call real driver, encode) -> ring_push.
- * Driver: dlopen(LODOS_VK_LIB or -l path, default system libvulkan.so); pluggable for vk-layer later
- * (R12: an ICD lib would need vk_icdGetInstanceProcAddr instead of dlsym).
+ * Mapped memory (v0 shadow): host vkAllocateMemory+vkMapMemory paired with a memfd shared with the
+ * client via SCM_RIGHTS on c->sock; bytes synced on map/flush/invalidate/unmap + submit/wait.
  * usage: vkb_server [-s name] [-l libpath] */
 #define _GNU_SOURCE
 #include "vkb_rpc.h"
@@ -16,7 +16,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/mman.h>
 #include <sys/socket.h>
+#include <sys/syscall.h>
 #include <sys/un.h>
 #include <unistd.h>
 
@@ -24,7 +26,13 @@
 
 static void *g_lib;
 static PFN_vkGetInstanceProcAddr g_gipa;
+static vkr_srv_fns g_real_fns;
 static vkr_srv_fns g_fns;
+static pthread_mutex_t g_load_mu = PTHREAD_MUTEX_INITIALIZER;
+static int g_inst_loaded;
+#ifdef VKB_CMD_HAS_vkMapMemory
+static PFN_vkMapMemory g_real_vkMapMemory;
+#endif
 
 /* ---- per-client handle table: id = index + 1 (0 = VK_NULL_HANDLE) */
 typedef struct { VkObjectType t; uint64_t h; } hent;
@@ -79,16 +87,286 @@ void vkr_h_drop(void *hctx, VkObjectType t, uint64_t h) {
     }
 }
 
-/* ---- client thread */
+#ifdef VKB_CMD_HAS_vkMapMemory
+typedef struct {
+    VkDevice dev;
+    VkDeviceMemory mem;
+    VkDeviceSize alloc_size;
+    void *host_ptr;
+    void *shm_ptr;
+    size_t shm_map_len;
+    VkDeviceSize map_offset;
+    VkDeviceSize map_size;
+} srv_mem;
+#endif
+
 typedef struct {
     int sock;
     ring c2s, s2c;
     atomic_int done;
     pthread_t watcher;
+#ifdef VKB_CMD_HAS_vkMapMemory
+    srv_mem *mems;
+    uint32_t nmems, capmems;
+#endif
 } client;
 
-/* socket EOF = client gone (crash or close): unblock the worker by pushing BYE into c2s.
- * Safe as the producer side is dead/finished. */
+static _Thread_local client *t_cli;
+
+static void *getproc(const char *name, void *ud) {
+    VkInstance inst = (VkInstance)ud;
+    void *p = inst ? NULL : dlsym(g_lib, name);
+    if (!p && g_gipa) p = (void *)g_gipa(inst, name);
+    return p;
+}
+
+static void srv_install_wrappers(void);
+
+#ifdef VKB_CMD_HAS_vkMapMemory
+static srv_mem *srv_mem_find(client *c, VkDevice dev, VkDeviceMemory mem) {
+    if (!c || !mem) return NULL;
+    for (uint32_t i = 0; i < c->nmems; i++)
+        if (c->mems[i].mem == mem && c->mems[i].dev == dev) return &c->mems[i];
+    return NULL;
+}
+
+static void srv_sync_range(srv_mem *m, VkDeviceSize roff, VkDeviceSize rsz, int to_host) {
+    if (!m || !m->shm_ptr || !m->host_ptr || !m->map_size) return;
+    if (rsz == VK_WHOLE_SIZE) rsz = roff <= m->alloc_size ? m->alloc_size - roff : 0;
+    VkDeviceSize lo = roff > m->map_offset ? roff : m->map_offset;
+    VkDeviceSize hi_r = roff + rsz, hi_m = m->map_offset + m->map_size;
+    VkDeviceSize hi = hi_r < hi_m ? hi_r : hi_m;
+    if (hi <= lo) return;
+    size_t off = (size_t)(lo - m->map_offset), len = (size_t)(hi - lo);
+    if (to_host) memcpy((uint8_t *)m->host_ptr + off, (const uint8_t *)m->shm_ptr + off, len);
+    else memcpy((uint8_t *)m->shm_ptr + off, (const uint8_t *)m->host_ptr + off, len);
+}
+
+static void srv_sync_all(client *c, int to_host) {
+    if (!c) return;
+    for (uint32_t i = 0; i < c->nmems; i++) {
+        srv_mem *m = &c->mems[i];
+        if (m->shm_ptr && m->host_ptr && m->map_size) {
+            if (to_host) memcpy(m->host_ptr, m->shm_ptr, (size_t)m->map_size);
+            else memcpy(m->shm_ptr, m->host_ptr, (size_t)m->map_size);
+        }
+    }
+}
+
+static VKAPI_ATTR VkResult VKAPI_CALL srv_wrap_vkAllocateMemory(
+    VkDevice dev, const VkMemoryAllocateInfo *pInfo,
+    const VkAllocationCallbacks *pAlloc, VkDeviceMemory *pMem) {
+    VkResult r = g_real_fns.vkAllocateMemory(dev, pInfo, pAlloc, pMem);
+    client *c = t_cli;
+    if (r == VK_SUCCESS && c && pMem && *pMem) {
+        srv_mem *m = srv_mem_find(c, dev, *pMem);
+        if (!m) {
+            for (uint32_t i = 0; i < c->nmems; i++)
+                if (!c->mems[i].mem) { m = &c->mems[i]; break; }
+        }
+        if (!m) {
+            if (c->nmems == c->capmems) {
+                uint32_t nc = c->capmems ? c->capmems * 2 : 16;
+                srv_mem *nm = realloc(c->mems, nc * sizeof *nm);
+                if (!nm) abort();
+                c->mems = nm; c->capmems = nc;
+            }
+            m = &c->mems[c->nmems++];
+        }
+        *m = (srv_mem){ .dev = dev, .mem = *pMem, .alloc_size = pInfo ? pInfo->allocationSize : 0 };
+    }
+    return r;
+}
+
+static VKAPI_ATTR void VKAPI_CALL srv_wrap_vkUnmapMemory(VkDevice dev, VkDeviceMemory mem) {
+    srv_mem *m = srv_mem_find(t_cli, dev, mem);
+    if (m && m->shm_ptr) {
+        if (m->host_ptr && m->map_size) memcpy(m->host_ptr, m->shm_ptr, (size_t)m->map_size);
+        munmap(m->shm_ptr, m->shm_map_len);
+        m->shm_ptr = NULL; m->host_ptr = NULL;
+        m->shm_map_len = 0; m->map_offset = 0; m->map_size = 0;
+    }
+    g_real_fns.vkUnmapMemory(dev, mem);
+}
+
+static VKAPI_ATTR void VKAPI_CALL srv_wrap_vkFreeMemory(
+    VkDevice dev, VkDeviceMemory mem, const VkAllocationCallbacks *pAlloc) {
+    srv_mem *m = srv_mem_find(t_cli, dev, mem);
+    if (m) {
+        if (m->shm_ptr) munmap(m->shm_ptr, m->shm_map_len);
+        *m = (srv_mem){ 0 };
+    }
+    g_real_fns.vkFreeMemory(dev, mem, pAlloc);
+}
+
+static VKAPI_ATTR void VKAPI_CALL srv_wrap_vkDestroyDevice(
+    VkDevice dev, const VkAllocationCallbacks *pAlloc) {
+    client *c = t_cli;
+    if (c) {
+        for (uint32_t i = 0; i < c->nmems; i++) {
+            if (c->mems[i].dev == dev) {
+                if (c->mems[i].shm_ptr) munmap(c->mems[i].shm_ptr, c->mems[i].shm_map_len);
+                c->mems[i] = (srv_mem){ 0 };
+            }
+        }
+    }
+    g_real_fns.vkDestroyDevice(dev, pAlloc);
+}
+
+static VKAPI_ATTR VkResult VKAPI_CALL srv_wrap_vkFlushMappedMemoryRanges(
+    VkDevice dev, uint32_t count, const VkMappedMemoryRange *pRanges) {
+    if (pRanges)
+        for (uint32_t i = 0; i < count; i++)
+            srv_sync_range(srv_mem_find(t_cli, dev, pRanges[i].memory), pRanges[i].offset, pRanges[i].size, 1);
+    return g_real_fns.vkFlushMappedMemoryRanges(dev, count, pRanges);
+}
+
+static VKAPI_ATTR VkResult VKAPI_CALL srv_wrap_vkInvalidateMappedMemoryRanges(
+    VkDevice dev, uint32_t count, const VkMappedMemoryRange *pRanges) {
+    VkResult r = g_real_fns.vkInvalidateMappedMemoryRanges(dev, count, pRanges);
+    if (r >= 0 && pRanges)
+        for (uint32_t i = 0; i < count; i++)
+            srv_sync_range(srv_mem_find(t_cli, dev, pRanges[i].memory), pRanges[i].offset, pRanges[i].size, 0);
+    return r;
+}
+
+static VKAPI_ATTR VkResult VKAPI_CALL srv_wrap_vkQueueSubmit(
+    VkQueue queue, uint32_t submitCount, const VkSubmitInfo *pSubmits, VkFence fence) {
+    srv_sync_all(t_cli, 1);
+    return g_real_fns.vkQueueSubmit(queue, submitCount, pSubmits, fence);
+}
+
+static VKAPI_ATTR VkResult VKAPI_CALL srv_wrap_vkQueueWaitIdle(VkQueue queue) {
+    VkResult r = g_real_fns.vkQueueWaitIdle(queue);
+    if (r == VK_SUCCESS) srv_sync_all(t_cli, 0);
+    return r;
+}
+
+static VKAPI_ATTR VkResult VKAPI_CALL srv_wrap_vkDeviceWaitIdle(VkDevice dev) {
+    VkResult r = g_real_fns.vkDeviceWaitIdle(dev);
+    if (r == VK_SUCCESS) srv_sync_all(t_cli, 0);
+    return r;
+}
+
+static VKAPI_ATTR VkResult VKAPI_CALL srv_wrap_vkWaitForFences(
+    VkDevice dev, uint32_t count, const VkFence *pFences, VkBool32 waitAll, uint64_t timeout) {
+    VkResult r = g_real_fns.vkWaitForFences(dev, count, pFences, waitAll, timeout);
+    if (r == VK_SUCCESS) srv_sync_all(t_cli, 0);
+    return r;
+}
+
+static VKAPI_ATTR VkResult VKAPI_CALL srv_wrap_vkGetFenceStatus(VkDevice dev, VkFence fence) {
+    VkResult r = g_real_fns.vkGetFenceStatus(dev, fence);
+    if (r == VK_SUCCESS) srv_sync_all(t_cli, 0);
+    return r;
+}
+
+static size_t srv_vkMapMemory(client *c, htab *ht, const uint8_t *req, size_t len, uint8_t *rep, size_t cap) {
+    vkr_rd r = { req, len, 0, 0, NULL, ht };
+    vkr_wr w = { rep, cap, 0, 0, ht };
+    (void)vkr_get_u32(&r);
+    int ok1 = 1, ok2 = 1;
+    VkDevice dev = (VkDevice)(uintptr_t)vkr_h_in(ht, VK_OBJECT_TYPE_DEVICE, vkr_get_u64(&r), &ok1);
+    VkDeviceMemory mem = (VkDeviceMemory)(uintptr_t)vkr_h_in(ht, VK_OBJECT_TYPE_DEVICE_MEMORY, vkr_get_u64(&r), &ok2);
+    VkDeviceSize offset = 0, size = 0;
+    VkMemoryMapFlags flags = 0;
+    vkr_get(&r, &offset, sizeof offset);
+    vkr_get(&r, &size, sizeof size);
+    vkr_get(&r, &flags, sizeof flags);
+    vkr_put_u32(&w, VKB_CMD_vkMapMemory);
+    if (r.err || !ok1 || !ok2 || !g_real_vkMapMemory) {
+        VkResult e = (!ok1 || !ok2 || r.err) ? VK_ERROR_UNKNOWN : VK_ERROR_FEATURE_NOT_PRESENT;
+        vkr_put(&w, &e, sizeof e);
+        return w.err ? 0 : w.off;
+    }
+    srv_mem *m = srv_mem_find(c, dev, mem);
+    if (!m || m->shm_ptr || offset > m->alloc_size || (size != VK_WHOLE_SIZE && size > m->alloc_size - offset)) {
+        VkResult e = VK_ERROR_MEMORY_MAP_FAILED;
+        vkr_put(&w, &e, sizeof e);
+        return w.err ? 0 : w.off;
+    }
+    VkDeviceSize actual = (size == VK_WHOLE_SIZE) ? (m->alloc_size - offset) : size;
+    void *host_ptr = NULL;
+    VkResult res = g_real_vkMapMemory(dev, mem, offset, size, flags, &host_ptr);
+    if (res < 0) {
+        vkr_put(&w, &res, sizeof res);
+        return w.err ? 0 : w.off;
+    }
+    size_t mlen = actual ? (size_t)actual : 1;
+    int fd = (int)syscall(SYS_memfd_create, "vkb-mem", 1u /*MFD_CLOEXEC*/);
+    void *shm_ptr = MAP_FAILED;
+    if (fd < 0 || ftruncate(fd, (off_t)mlen) < 0 ||
+        (shm_ptr = mmap(NULL, mlen, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0)) == MAP_FAILED) {
+        if (fd >= 0) close(fd);
+        if (g_real_fns.vkUnmapMemory) g_real_fns.vkUnmapMemory(dev, mem);
+        VkResult e = VK_ERROR_OUT_OF_HOST_MEMORY;
+        vkr_put(&w, &e, sizeof e);
+        return w.err ? 0 : w.off;
+    }
+    if (actual && host_ptr) memcpy(shm_ptr, host_ptr, (size_t)actual);
+    char tag = 'M';
+    ssize_t sn = sock_send(c->sock, &tag, 1, &fd, 1);
+    close(fd);
+    if (sn != 1) {
+        munmap(shm_ptr, mlen);
+        if (g_real_fns.vkUnmapMemory) g_real_fns.vkUnmapMemory(dev, mem);
+        VkResult e = VK_ERROR_MEMORY_MAP_FAILED;
+        vkr_put(&w, &e, sizeof e);
+        return w.err ? 0 : w.off;
+    }
+    m->host_ptr = host_ptr;
+    m->shm_ptr = shm_ptr;
+    m->shm_map_len = mlen;
+    m->map_offset = offset;
+    m->map_size = actual;
+    vkr_put(&w, &res, sizeof res);
+    vkr_put_u64(&w, (uint64_t)actual);
+    return w.err ? 0 : w.off;
+}
+#endif /* VKB_CMD_HAS_vkMapMemory */
+
+#ifdef VKB_HAS_vkCreateInstance
+static VKAPI_ATTR VkResult VKAPI_CALL srv_wrap_vkCreateInstance(
+    const VkInstanceCreateInfo *pCI, const VkAllocationCallbacks *pAlloc, VkInstance *pInst) {
+    VkResult r = g_real_fns.vkCreateInstance(pCI, pAlloc, pInst);
+    if (r == VK_SUCCESS && pInst && *pInst && g_gipa) {
+        pthread_mutex_lock(&g_load_mu);
+        if (!g_inst_loaded) {
+            vkr_srv_load(&g_real_fns, getproc, *pInst);
+#ifdef VKB_CMD_HAS_vkMapMemory
+            if (!g_real_vkMapMemory)
+                g_real_vkMapMemory = (PFN_vkMapMemory)getproc("vkMapMemory", *pInst);
+#endif
+            srv_install_wrappers();
+            g_inst_loaded = 1;
+        }
+        pthread_mutex_unlock(&g_load_mu);
+    }
+    return r;
+}
+#endif
+
+static void srv_install_wrappers(void) {
+    g_fns = g_real_fns;
+#ifdef VKB_HAS_vkCreateInstance
+    if (g_real_fns.vkCreateInstance) g_fns.vkCreateInstance = srv_wrap_vkCreateInstance;
+#endif
+#ifdef VKB_CMD_HAS_vkMapMemory
+    if (g_real_fns.vkDestroyDevice) g_fns.vkDestroyDevice = srv_wrap_vkDestroyDevice;
+    if (g_real_fns.vkAllocateMemory) g_fns.vkAllocateMemory = srv_wrap_vkAllocateMemory;
+    if (g_real_fns.vkFreeMemory) g_fns.vkFreeMemory = srv_wrap_vkFreeMemory;
+    if (g_real_fns.vkUnmapMemory) g_fns.vkUnmapMemory = srv_wrap_vkUnmapMemory;
+    if (g_real_fns.vkFlushMappedMemoryRanges) g_fns.vkFlushMappedMemoryRanges = srv_wrap_vkFlushMappedMemoryRanges;
+    if (g_real_fns.vkInvalidateMappedMemoryRanges) g_fns.vkInvalidateMappedMemoryRanges = srv_wrap_vkInvalidateMappedMemoryRanges;
+    if (g_real_fns.vkQueueSubmit) g_fns.vkQueueSubmit = srv_wrap_vkQueueSubmit;
+    if (g_real_fns.vkQueueWaitIdle) g_fns.vkQueueWaitIdle = srv_wrap_vkQueueWaitIdle;
+    if (g_real_fns.vkDeviceWaitIdle) g_fns.vkDeviceWaitIdle = srv_wrap_vkDeviceWaitIdle;
+    if (g_real_fns.vkWaitForFences) g_fns.vkWaitForFences = srv_wrap_vkWaitForFences;
+    if (g_real_fns.vkGetFenceStatus) g_fns.vkGetFenceStatus = srv_wrap_vkGetFenceStatus;
+#endif
+}
+
+/* socket EOF = client gone (crash or close): unblock the worker by pushing BYE into c2s. */
 static void *watch_fn(void *arg) {
     client *c = arg;
     char b[16]; int nf;
@@ -99,6 +377,7 @@ static void *watch_fn(void *arg) {
 
 static void *client_fn(void *arg) {
     client *c = arg;
+    t_cli = c;
     int fds[SOCK_MAX_FDS], nf = 0;
     char hello[8];
     uint8_t *req = NULL, *rep = NULL, *arena_mem = NULL;
@@ -128,7 +407,13 @@ static void *client_fn(void *arg) {
         if (len >= 4) memcpy(&cmd, req, 4);
         if (cmd == VKR_CMD_BYE) break;
         vkr_arena a = { arena_mem, ARENA_SZ, 0 };
+#ifdef VKB_CMD_HAS_vkMapMemory
+        size_t rl = (cmd == VKB_CMD_vkMapMemory)
+            ? srv_vkMapMemory(c, &ht, req, (size_t)len, rep, repcap)
+            : vkr_srv_dispatch(&g_fns, &ht, &a, req, (size_t)len, rep, repcap);
+#else
         size_t rl = vkr_srv_dispatch(&g_fns, &ht, &a, req, (size_t)len, rep, repcap);
+#endif
         if (!rl) { /* unknown cmd / malformed header: reply cmd + VK_ERROR_FEATURE_NOT_PRESENT */
             VkResult e = VK_ERROR_FEATURE_NOT_PRESENT;
             memcpy(rep, &cmd, 4); memcpy(rep + 4, &e, 4); rl = 8;
@@ -139,27 +424,25 @@ static void *client_fn(void *arg) {
     atomic_store(&c->done, 1);
     shutdown(c->sock, SHUT_RDWR);
     pthread_join(c->watcher, NULL);
+#ifdef VKB_CMD_HAS_vkMapMemory
+    for (uint32_t i = 0; i < c->nmems; i++)
+        if (c->mems[i].shm_ptr) munmap(c->mems[i].shm_ptr, c->mems[i].shm_map_len);
+    free(c->mems);
+#endif
     /* leaked devices/instances of a dead/sloppy client */
 #ifdef VKB_HAS_vkDestroyDevice
     for (uint32_t i = 0; i < ht.n; i++)
-        if (ht.e[i].t == VK_OBJECT_TYPE_DEVICE && ht.e[i].h && g_fns.vkDestroyDevice)
-            g_fns.vkDestroyDevice((VkDevice)(uintptr_t)ht.e[i].h, NULL);
+        if (ht.e[i].t == VK_OBJECT_TYPE_DEVICE && ht.e[i].h && g_real_fns.vkDestroyDevice)
+            g_real_fns.vkDestroyDevice((VkDevice)(uintptr_t)ht.e[i].h, NULL);
 #endif
     for (uint32_t i = 0; i < ht.n; i++)
-        if (ht.e[i].t == VK_OBJECT_TYPE_INSTANCE && ht.e[i].h && g_fns.vkDestroyInstance)
-            g_fns.vkDestroyInstance((VkInstance)(uintptr_t)ht.e[i].h, NULL);
+        if (ht.e[i].t == VK_OBJECT_TYPE_INSTANCE && ht.e[i].h && g_real_fns.vkDestroyInstance)
+            g_real_fns.vkDestroyInstance((VkInstance)(uintptr_t)ht.e[i].h, NULL);
     fprintf(stderr, "vkb_server: client done, %llu calls\n", (unsigned long long)ncalls);
     free(ht.e); free(req); free(rep); free(arena_mem);
     ring_destroy(&c->c2s); ring_destroy(&c->s2c);
     close(c->sock); free(c);
     return NULL;
-}
-
-static void *getproc(const char *name, void *ud) {
-    (void)ud;
-    void *p = dlsym(g_lib, name);
-    if (!p && g_gipa) p = (void *)g_gipa(NULL, name);
-    return p;
 }
 
 int main(int argc, char **argv) {
@@ -178,8 +461,13 @@ int main(int argc, char **argv) {
     if (!g_lib) { fprintf(stderr, "vkb_server: dlopen %s: %s\n", lib, dlerror()); return 1; }
     g_gipa = (PFN_vkGetInstanceProcAddr)dlsym(g_lib, "vkGetInstanceProcAddr");
     if (!g_gipa) g_gipa = (PFN_vkGetInstanceProcAddr)dlsym(g_lib, "vk_icdGetInstanceProcAddr");
-    int miss = vkr_srv_load(&g_fns, getproc, NULL);
-    if (miss) fprintf(stderr, "vkb_server: warning: %d bridged fns missing in %s\n", miss, lib);
+    int miss = vkr_srv_load(&g_real_fns, getproc, NULL);
+#ifdef VKB_CMD_HAS_vkMapMemory
+    g_real_vkMapMemory = (PFN_vkMapMemory)getproc("vkMapMemory", NULL);
+    if (!g_real_vkMapMemory) miss++;
+#endif
+    srv_install_wrappers();
+    if (miss) fprintf(stderr, "vkb_server: note: %d fns deferred to instance GIPA in %s\n", miss, lib);
 
     int ls = socket(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0);
     if (ls < 0) { perror("socket"); return 1; }

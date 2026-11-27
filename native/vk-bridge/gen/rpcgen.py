@@ -22,6 +22,7 @@ Handle map: server ids are table indices (vkr_h_out inserts, vkr_h_in looks up, 
 Two-call idiom: count is in/out, array gets capacity = *count at call time; VK_INCOMPLETE is >= 0.
 """
 import os
+from gen import eval_len_expr
 
 HDR_CMD_BASE = 1  # cmd ids follow vkb_cmds.h enum
 
@@ -131,6 +132,10 @@ def emit(reg, Gen, Unsupported, cmds, out, hdr):
             return ['vkr_put_u8(w, (%s) != NULL);' % ex]
         if k == 'string':
             return ['vkr_put_str(w, %s);' % ex]
+        if k == 'bytes':
+            return ['vkr_put_u8(w, (%s) != NULL);' % ex,
+                    'if (%s) { uint32_t c_ = (uint32_t)(%s); vkr_put_u32(w, c_); if (c_) vkr_put(w, %s, c_); }' %
+                    (ex, cnt(d.len[0]), ex)]
         if k == 'single':
             return ['vkr_put_u8(w, (%s) != NULL);' % ex, 'if (%s) {' % ex] + \
                 ['    ' + x for x in enc_val(ek, base, '(*(%s))' % ex)] + ['}']
@@ -162,6 +167,11 @@ def emit(reg, Gen, Unsupported, cmds, out, hdr):
             return ['(void)vkr_get_u8(r);', '%s = NULL;' % lv]
         if k == 'string':
             return ['%s = vkr_get_str(r);' % lv]
+        if k == 'bytes':
+            return ['if (vkr_get_u8(r)) { uint32_t c_ = vkr_get_u32(r); %s = c_;' % nvar,
+                    '    uint8_t *e_ = (uint8_t *)vkr_alloc_arr(r, c_, 1, 1);',
+                    '    if (e_ && c_) vkr_get(r, e_, c_);',
+                    '    %s = (const void *)e_; } else %s = NULL;' % (lv, lv)]
         et = g.elem_ctype(d)
         if k == 'single':
             return ['if (vkr_get_u8(r)) { %s *e_ = (%s *)vkr_alloc(r, sizeof(%s));' % (et, et, et),
@@ -183,7 +193,11 @@ def emit(reg, Gen, Unsupported, cmds, out, hdr):
         res = []
         for d in decls:
             k, _ = g.classify(d, is_param)
-            if k not in ('array', 'strarray'):
+            if k not in ('array', 'strarray', 'bytes'):
+                continue
+            if d.len[0] == 'codeSize / 4' and 'codeSize' in names:
+                res.append('if (%s && ((%s) %% 4 != 0 || %s != (uint32_t)((%s) / 4))) vkr_fail(&r->err, VKR_E_COUNT);' %
+                           (acc(d.name), acc('codeSize'), nv(d.name), acc('codeSize')))
                 continue
             ln = names.get(d.len[0])
             if ln is None or ln.depth != 0:
@@ -213,9 +227,17 @@ def emit(reg, Gen, Unsupported, cmds, out, hdr):
                             else:
                                 raise Unsupported('out struct %s not flat/chained' % bs)
                     if k == 'array':
-                        ln = [q for q in ps if q.name == p.len[0]]
-                        if not ln or (ln[0].depth and dirn(ln[0], ps) != 'inout'):
-                            raise Unsupported('out array %s len %s' % (p.name, p.len[0]))
+                        ln0 = p.len[0]
+                        if '->' in ln0:
+                            pnm, mnm = ln0.split('->', 1)
+                            qp = [q for q in ps if q.name == pnm and dirn(q, ps) == 'in' and g.classify(q, True) == ('single', 'struct')]
+                            qm = [m for m in R.structs.get(R.res(qp[0].base), []) if m.name == mnm and m.depth == 0] if qp else []
+                            if not qm:
+                                raise Unsupported('out array %s len %s' % (p.name, ln0))
+                        else:
+                            ln = [q for q in ps if q.name == ln0]
+                            if not ln or (ln[0].depth and dirn(ln[0], ps) != 'inout'):
+                                raise Unsupported('out array %s len %s' % (p.name, ln0))
             ok.append(c)
         except Unsupported as ex:
             bad[c] = str(ex)
@@ -271,6 +293,8 @@ def emit(reg, Gen, Unsupported, cmds, out, hdr):
           'uint8_t *vkbc__buf(vkbc *c, size_t *cap);',
           '/* send req (in vkbc__buf), wait reply; returns 0 or -errno */',
           'int vkbc__call(vkbc *c, size_t len, const uint8_t **rep, size_t *replen);',
+          '/* drop local shm mapping(s) on unmap/free/destroy (mem==0 drops all on dev) */',
+          'void vkbc__drop_map(vkbc *c, uint64_t dev, uint64_t mem);',
           '/* client API: same params as Vulkan, prefixed with vkbc *. void cmds return VK_SUCCESS/bridge error */']
     for c in ok:
         h.append(cproto(c, 'vkbc_', 'vkbc *c') + ';')
@@ -289,14 +313,53 @@ def emit(reg, Gen, Unsupported, cmds, out, hdr):
 
     # ---- vkb_rpc_common.c ----------------------------------------------
     m = [hdr, '#include "vkb_rpc.h"', '']
+    if 'VkWriteDescriptorSet' in structs or 'VkDescriptorSetLayoutBinding' in structs:
+        m += ['static inline int vkr_ds_has_imm_sampler(VkDescriptorType t) {',
+              '    return t == VK_DESCRIPTOR_TYPE_SAMPLER || t == VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;',
+              '}', '']
+    if 'VkWriteDescriptorSet' in structs:
+        m += ['static inline int vkr_ds_has_img(VkDescriptorType t) {',
+              '    return t == VK_DESCRIPTOR_TYPE_SAMPLER || t == VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER ||',
+              '           t == VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE || t == VK_DESCRIPTOR_TYPE_STORAGE_IMAGE ||',
+              '           t == VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT;',
+              '}',
+              'static inline int vkr_ds_has_buf(VkDescriptorType t) {',
+              '    return t == VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER || t == VK_DESCRIPTOR_TYPE_STORAGE_BUFFER ||',
+              '           t == VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC || t == VK_DESCRIPTOR_TYPE_STORAGE_BUFFER_DYNAMIC;',
+              '}',
+              'static inline int vkr_ds_has_texel(VkDescriptorType t) {',
+              '    return t == VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER || t == VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER;',
+              '}', '']
     for s in structs:
         mem = R.structs[s]
+        s_cnt = lambda ln0: eval_len_expr(ln0, lambda nm: 's->%s' % nm)
         m.append('void vkrw_%s(vkr_wr *w, const %s *s) {' % (s, s))
         for d in mem:
-            m += ['    ' + x for x in enc_in(d, 's->%s' % d.name, lambda nm: 's->%s' % nm, False)]
+            if s == 'VkDescriptorSetLayoutBinding' and d.name == 'pImmutableSamplers':
+                m += ['    { const VkSampler *is_ = vkr_ds_has_imm_sampler(s->descriptorType) ? s->pImmutableSamplers : NULL;'] + \
+                     ['      ' + x for x in enc_in(d, 'is_', s_cnt, False)] + ['    }']
+            elif s == 'VkWriteDescriptorSet' and d.name == 'pImageInfo':
+                i = 'i%d' % g.u()
+                m += ['    { const VkDescriptorImageInfo *pi_ = vkr_ds_has_img(s->descriptorType) ? s->pImageInfo : NULL;',
+                      '      vkr_put_u8(w, pi_ != NULL);',
+                      '      if (pi_) { uint32_t c_ = (uint32_t)(s->descriptorCount); vkr_put_u32(w, c_);',
+                      '          for (uint32_t %s = 0; %s < c_; %s++) {' % (i, i, i),
+                      '              VkDescriptorImageInfo ii_ = pi_[%s];' % i,
+                      '              if (!vkr_ds_has_imm_sampler(s->descriptorType)) ii_.sampler = VK_NULL_HANDLE;',
+                      '              if (s->descriptorType == VK_DESCRIPTOR_TYPE_SAMPLER) ii_.imageView = VK_NULL_HANDLE;',
+                      '              vkrw_VkDescriptorImageInfo(w, &ii_);',
+                      '          } } }']
+            elif s == 'VkWriteDescriptorSet' and d.name == 'pBufferInfo':
+                m += ['    { const VkDescriptorBufferInfo *pb_ = vkr_ds_has_buf(s->descriptorType) ? s->pBufferInfo : NULL;'] + \
+                     ['      ' + x for x in enc_in(d, 'pb_', s_cnt, False)] + ['    }']
+            elif s == 'VkWriteDescriptorSet' and d.name == 'pTexelBufferView':
+                m += ['    { const VkBufferView *pt_ = vkr_ds_has_texel(s->descriptorType) ? s->pTexelBufferView : NULL;'] + \
+                     ['      ' + x for x in enc_in(d, 'pt_', s_cnt, False)] + ['    }']
+            else:
+                m += ['    ' + x for x in enc_in(d, 's->%s' % d.name, s_cnt, False)]
         m += ['}', '']
         m.append('void vkrr_%s(vkr_rd *r, %s *s) {' % (s, s))
-        arrs = [d for d in mem if g.classify(d, False)[0] in ('array', 'strarray')]
+        arrs = [d for d in mem if g.classify(d, False)[0] in ('array', 'strarray', 'bytes')]
         for d in arrs:
             m.append('    uint32_t n_%s = 0;' % d.name)
         for d in mem:
@@ -306,10 +369,11 @@ def emit(reg, Gen, Unsupported, cmds, out, hdr):
 
     for s in chained_all:
         mem = R.structs[s][2:]
+        s_cnt = lambda ln0: eval_len_expr(ln0, lambda nm: 's->%s' % nm)
         m.append('void vkrw_body_%s(vkr_wr *w, const %s *s) {' % (s, s))
         m.append('    (void)w; (void)s;')
         for d in mem:
-            m += ['    ' + x for x in enc_in(d, 's->%s' % d.name, lambda nm: 's->%s' % nm, False)]
+            m += ['    ' + x for x in enc_in(d, 's->%s' % d.name, s_cnt, False)]
         m += ['}', '']
         m.append('void vkrr_body_%s(vkr_rd *r, %s *s) {' % (s, s))
         m.append('    (void)r; (void)s;')
@@ -384,9 +448,9 @@ def emit(reg, Gen, Unsupported, cmds, out, hdr):
               '}', '']
     open(os.path.join(out, 'vkb_rpc_common.c'), 'w').write('\n'.join(m))
 
-    def cnt_expr(ps, nm):
+    def cnt_expr(ps, ln0):
         isptr = {p.name: p.depth > 0 for p in ps}
-        return ('((%s) ? *(%s) : 0)' % (nm, nm)) if isptr.get(nm) else nm
+        return eval_len_expr(ln0, lambda nm: nm, isptr)
 
     def is_chained_param(p):
         _, ek = g.classify(p, True)
@@ -465,7 +529,12 @@ def emit(reg, Gen, Unsupported, cmds, out, hdr):
                 else:
                     m += ['              ' + x for x in dec_val(ek, base, '%s[%s]' % (p.name, i))]
                 m += ['          } } }']
-        m += ['    if (r->err) return VK_ERROR_UNKNOWN;', '    return res;', '}', '']
+        m.append('    if (r->err) return VK_ERROR_UNKNOWN;')
+        if c in ('vkUnmapMemory', 'vkFreeMemory'):
+            m.append('    vkbc__drop_map(c, (uint64_t)(uintptr_t)device, (uint64_t)(uintptr_t)memory);')
+        elif c == 'vkDestroyDevice':
+            m.append('    vkbc__drop_map(c, (uint64_t)(uintptr_t)device, 0);')
+        m += ['    return res;', '}', '']
     open(os.path.join(out, 'vkb_rpc_client.c'), 'w').write('\n'.join(m))
 
     # ---- vkb_rpc_server.c ----------------------------------------------
@@ -473,7 +542,7 @@ def emit(reg, Gen, Unsupported, cmds, out, hdr):
          'int vkr_srv_load(vkr_srv_fns *f, void *(*getproc)(const char *name, void *ud), void *ud) {',
          '    int miss = 0;']
     for c in ok:
-        m.append('    if (!(f->%s = (PFN_%s)getproc("%s", ud))) miss++;' % (c, c, c))
+        m.append('    if (!f->%s && !(f->%s = (PFN_%s)getproc("%s", ud))) miss++;' % (c, c, c, c))
     m += ['    return miss;', '}', '',
           'static VkResult vkr_err_res(int e) { return e == VKR_E_PNEXT ? VK_ERROR_FEATURE_NOT_PRESENT : VK_ERROR_UNKNOWN; }', '']
     for c in ok:
@@ -482,7 +551,7 @@ def emit(reg, Gen, Unsupported, cmds, out, hdr):
         for p in ps:
             m.append('    %s %s = 0;' % (p.ctype, p.name))
             k, _ = g.classify(p, True)
-            if k in ('array', 'strarray'):
+            if k in ('array', 'strarray', 'bytes'):
                 m.append('    uint32_t n_%s = 0; (void)n_%s;' % (p.name, p.name))
             if dirn(p, ps) == 'out' and is_chained_param(p):
                 if k == 'single':
@@ -521,8 +590,15 @@ def emit(reg, Gen, Unsupported, cmds, out, hdr):
                           '        }']
                 m.append('    }')
                 ln = p.len[0]
-                if [q for q in ps if q.name == ln and q.depth]:
+                if '->' in ln:
+                    pnm, mnm = ln.split('->', 1)
+                    m.append('    { uint32_t exp_ = %s ? (uint32_t)(%s->%s) : 0;' % (pnm, pnm, mnm))
+                    m.append('      if ((!%s && %s) || (exp_ > 0 && !%s) || (%s && n_%s != exp_)) vkr_fail(&r->err, VKR_E_COUNT); }' %
+                             (pnm, p.name, p.name, p.name, p.name))
+                elif [q for q in ps if q.name == ln and q.depth]:
                     m.append('    if (%s && (!%s || *%s > n_%s)) vkr_fail(&r->err, VKR_E_COUNT);' % (p.name, ln, ln, p.name))
+                else:
+                    m.append('    if ((uint32_t)(%s) > 0 && !%s) vkr_fail(&r->err, VKR_E_COUNT);' % (ln, p.name))
         m += ['    ' + x for x in count_checks(ps, lambda nm: nm, lambda nm: 'n_%s' % nm, True)]
         m += ['    vkr_put_u32(w, VKB_CMD_%s);' % c,
               '    if (r->err) { VkResult e_ = vkr_err_res(r->err); vkr_put(w, &e_, sizeof e_); return; }']
@@ -531,11 +607,19 @@ def emit(reg, Gen, Unsupported, cmds, out, hdr):
             m.append('    VkResult res = f->%s(%s);' % (c, args))
         else:
             m += ['    f->%s(%s);' % (c, args), '    VkResult res = VK_SUCCESS;']
-        if c.startswith('vkDestroy') or c.startswith('vkFree'):
-            obj = 'Vk' + c[len('vkDestroy'):] if c.startswith('vkDestroy') else None
+        if c.startswith('vkDestroy'):
+            obj = 'Vk' + c[len('vkDestroy'):]
             for p in ps:
                 if p.depth == 0 and R.res(p.base) == obj and g.classify(p, True)[1] == 'handle':
-                    m.append('    vkr_h_drop(w->hctx, %s, (uint64_t)(uintptr_t)%s);' % (objtype(p.base), p.name))
+                    m.append('    if (%s) vkr_h_drop(w->hctx, %s, (uint64_t)(uintptr_t)%s);' % (p.name, objtype(p.base), p.name))
+        elif c == 'vkFreeMemory':
+            m.append('    if (memory) vkr_h_drop(w->hctx, VK_OBJECT_TYPE_DEVICE_MEMORY, (uint64_t)(uintptr_t)memory);')
+        elif c == 'vkFreeCommandBuffers':
+            m.append('    if (pCommandBuffers) for (uint32_t i_ = 0; i_ < commandBufferCount; i_++)')
+            m.append('        if (pCommandBuffers[i_]) vkr_h_drop(w->hctx, VK_OBJECT_TYPE_COMMAND_BUFFER, (uint64_t)(uintptr_t)pCommandBuffers[i_]);')
+        elif c == 'vkFreeDescriptorSets':
+            m.append('    if (res == VK_SUCCESS && pDescriptorSets) for (uint32_t i_ = 0; i_ < descriptorSetCount; i_++)')
+            m.append('        if (pDescriptorSets[i_]) vkr_h_drop(w->hctx, VK_OBJECT_TYPE_DESCRIPTOR_SET, (uint64_t)(uintptr_t)pDescriptorSets[i_]);')
         m += ['    vkr_put(w, &res, sizeof res);', '    if (res < 0) return;']
         for p in ps:
             dr = dirn(p, ps)

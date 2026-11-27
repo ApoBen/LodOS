@@ -18,6 +18,7 @@ typedef struct icd_instance icd_instance;
 typedef struct icd_pdev icd_pdev;
 typedef struct icd_device icd_device;
 typedef struct icd_queue icd_queue;
+typedef struct icd_cmdbuf icd_cmdbuf;
 
 struct icd_pdev {
     VK_LOADER_DATA loader_data;
@@ -40,17 +41,26 @@ struct icd_queue {
     icd_queue *next;
 };
 
+struct icd_cmdbuf {
+    VK_LOADER_DATA loader_data;
+    uint64_t id;
+    VkCommandPool pool;
+    icd_cmdbuf *prev, *next;
+};
+
 struct icd_device {
     VK_LOADER_DATA loader_data;
     uint64_t id;
     icd_pdev *pdev;
     icd_queue *queues;
+    icd_cmdbuf *cmdbufs;
 };
 
 _Static_assert(offsetof(icd_instance, loader_data) == 0, "VK_LOADER_DATA must be at offset 0");
 _Static_assert(offsetof(icd_pdev, loader_data) == 0, "VK_LOADER_DATA must be at offset 0");
 _Static_assert(offsetof(icd_device, loader_data) == 0, "VK_LOADER_DATA must be at offset 0");
 _Static_assert(offsetof(icd_queue, loader_data) == 0, "VK_LOADER_DATA must be at offset 0");
+_Static_assert(offsetof(icd_cmdbuf, loader_data) == 0, "VK_LOADER_DATA must be at offset 0");
 
 static pthread_mutex_t g_mu = PTHREAD_MUTEX_INITIALIZER;
 static vkbc *g_conn;
@@ -453,6 +463,30 @@ static VKAPI_ATTR VkResult VKAPI_CALL icd_vkGetPhysicalDeviceToolProperties(
 /* ---- Device commands ---- */
 
 #define DEV_RAW(d) ((VkDevice)(uintptr_t)((icd_device *)(d))->id)
+#define QUEUE_RAW(q) ((VkQueue)(uintptr_t)((icd_queue *)(q))->id)
+#define CMDBUF_RAW(cb) ((cb) ? (VkCommandBuffer)(uintptr_t)((icd_cmdbuf *)(cb))->id : VK_NULL_HANDLE)
+
+static void cmdbuf_unlink_free(icd_device *dev, icd_cmdbuf *cb) {
+    if (cb->prev) cb->prev->next = cb->next;
+    else dev->cmdbufs = cb->next;
+    if (cb->next) cb->next->prev = cb->prev;
+    free(cb);
+}
+
+#define ICD_CALL_RES(expr) do { \
+    pthread_mutex_lock(&g_mu); \
+    vkbc *c_ = icd_conn_locked(); \
+    VkResult r_ = c_ ? (expr) : VK_ERROR_DEVICE_LOST; \
+    pthread_mutex_unlock(&g_mu); \
+    return r_; \
+} while (0)
+
+#define ICD_CALL_VOID(expr) do { \
+    pthread_mutex_lock(&g_mu); \
+    vkbc *c_ = icd_conn_locked(); \
+    if (c_) (void)(expr); \
+    pthread_mutex_unlock(&g_mu); \
+} while (0)
 
 static VKAPI_ATTR VkResult VKAPI_CALL icd_vkCreateDevice(
     VkPhysicalDevice pd, const VkDeviceCreateInfo *pCreateInfo,
@@ -505,6 +539,7 @@ static VKAPI_ATTR void VKAPI_CALL icd_vkDestroyDevice(
     pthread_mutex_lock(&g_mu);
     vkbc *c = icd_conn_locked();
     if (c) (void)vkbc_vkDestroyDevice(c, DEV_RAW(device), pAllocator);
+    while (dev->cmdbufs) cmdbuf_unlink_free(dev, dev->cmdbufs);
     pthread_mutex_unlock(&g_mu);
     icd_queue *q = dev->queues;
     while (q) {
@@ -513,6 +548,10 @@ static VKAPI_ATTR void VKAPI_CALL icd_vkDestroyDevice(
         q = nx;
     }
     free(dev);
+}
+
+static VKAPI_ATTR VkResult VKAPI_CALL icd_vkDeviceWaitIdle(VkDevice device) {
+    ICD_CALL_RES(vkbc_vkDeviceWaitIdle(c_, DEV_RAW(device)));
 }
 
 static VKAPI_ATTR void VKAPI_CALL icd_vkGetDeviceQueue(
@@ -549,34 +588,170 @@ static VKAPI_ATTR void VKAPI_CALL icd_vkGetDeviceQueue(
     pthread_mutex_unlock(&g_mu);
 }
 
+static VKAPI_ATTR VkResult VKAPI_CALL icd_vkQueueSubmit(
+    VkQueue queue, uint32_t submitCount, const VkSubmitInfo *pSubmits, VkFence fence) {
+    if (!queue) return VK_ERROR_DEVICE_LOST;
+    VkSubmitInfo *subs = NULL;
+    VkCommandBuffer *cbs = NULL;
+    if (submitCount > 0 && pSubmits) {
+        uint32_t total_cb = 0;
+        for (uint32_t i = 0; i < submitCount; i++) total_cb += pSubmits[i].commandBufferCount;
+        subs = calloc(submitCount, sizeof(*subs));
+        if (!subs) return VK_ERROR_OUT_OF_HOST_MEMORY;
+        if (total_cb > 0) {
+            cbs = calloc(total_cb, sizeof(*cbs));
+            if (!cbs) { free(subs); return VK_ERROR_OUT_OF_HOST_MEMORY; }
+        }
+        uint32_t off = 0;
+        for (uint32_t i = 0; i < submitCount; i++) {
+            subs[i] = pSubmits[i];
+            subs[i].pNext = NULL;
+            if (subs[i].commandBufferCount > 0 && subs[i].pCommandBuffers) {
+                for (uint32_t j = 0; j < subs[i].commandBufferCount; j++)
+                    cbs[off + j] = CMDBUF_RAW(subs[i].pCommandBuffers[j]);
+                subs[i].pCommandBuffers = &cbs[off];
+                off += subs[i].commandBufferCount;
+            }
+        }
+    }
+    pthread_mutex_lock(&g_mu);
+    vkbc *c = icd_conn_locked();
+    VkResult r = c ? vkbc_vkQueueSubmit(c, QUEUE_RAW(queue), submitCount, subs, fence) : VK_ERROR_DEVICE_LOST;
+    pthread_mutex_unlock(&g_mu);
+    free(cbs);
+    free(subs);
+    return r;
+}
+
+static VKAPI_ATTR VkResult VKAPI_CALL icd_vkQueueWaitIdle(VkQueue queue) {
+    if (!queue) return VK_ERROR_DEVICE_LOST;
+    ICD_CALL_RES(vkbc_vkQueueWaitIdle(c_, QUEUE_RAW(queue)));
+}
+
+/* ---- Sync: Fence & Semaphore ---- */
+
+static VKAPI_ATTR VkResult VKAPI_CALL icd_vkCreateFence(
+    VkDevice device, const VkFenceCreateInfo *pCreateInfo,
+    const VkAllocationCallbacks *pAllocator, VkFence *pFence) {
+    if (!pCreateInfo) return VK_ERROR_INITIALIZATION_FAILED;
+    VkFenceCreateInfo ci = *pCreateInfo;
+    ci.pNext = NULL;
+    ICD_CALL_RES(vkbc_vkCreateFence(c_, DEV_RAW(device), &ci, pAllocator, pFence));
+}
+
+static VKAPI_ATTR void VKAPI_CALL icd_vkDestroyFence(
+    VkDevice device, VkFence fence, const VkAllocationCallbacks *pAllocator) {
+    if (!fence) return;
+    ICD_CALL_VOID(vkbc_vkDestroyFence(c_, DEV_RAW(device), fence, pAllocator));
+}
+
+static VKAPI_ATTR VkResult VKAPI_CALL icd_vkResetFences(
+    VkDevice device, uint32_t fenceCount, const VkFence *pFences) {
+    ICD_CALL_RES(vkbc_vkResetFences(c_, DEV_RAW(device), fenceCount, pFences));
+}
+
+static VKAPI_ATTR VkResult VKAPI_CALL icd_vkGetFenceStatus(VkDevice device, VkFence fence) {
+    ICD_CALL_RES(vkbc_vkGetFenceStatus(c_, DEV_RAW(device), fence));
+}
+
+static VKAPI_ATTR VkResult VKAPI_CALL icd_vkWaitForFences(
+    VkDevice device, uint32_t fenceCount, const VkFence *pFences, VkBool32 waitAll, uint64_t timeout) {
+    ICD_CALL_RES(vkbc_vkWaitForFences(c_, DEV_RAW(device), fenceCount, pFences, waitAll, timeout));
+}
+
+static VKAPI_ATTR VkResult VKAPI_CALL icd_vkCreateSemaphore(
+    VkDevice device, const VkSemaphoreCreateInfo *pCreateInfo,
+    const VkAllocationCallbacks *pAllocator, VkSemaphore *pSemaphore) {
+    if (!pCreateInfo) return VK_ERROR_INITIALIZATION_FAILED;
+    VkSemaphoreCreateInfo ci = *pCreateInfo;
+    ci.pNext = NULL;
+    ICD_CALL_RES(vkbc_vkCreateSemaphore(c_, DEV_RAW(device), &ci, pAllocator, pSemaphore));
+}
+
+static VKAPI_ATTR void VKAPI_CALL icd_vkDestroySemaphore(
+    VkDevice device, VkSemaphore semaphore, const VkAllocationCallbacks *pAllocator) {
+    if (!semaphore) return;
+    ICD_CALL_VOID(vkbc_vkDestroySemaphore(c_, DEV_RAW(device), semaphore, pAllocator));
+}
+
+/* ---- Memory ---- */
+
+static VKAPI_ATTR VkResult VKAPI_CALL icd_vkAllocateMemory(
+    VkDevice device, const VkMemoryAllocateInfo *pAllocateInfo,
+    const VkAllocationCallbacks *pAllocator, VkDeviceMemory *pMemory) {
+    if (!pAllocateInfo) return VK_ERROR_INITIALIZATION_FAILED;
+    VkMemoryAllocateInfo ai = *pAllocateInfo;
+    ai.pNext = NULL;
+    ICD_CALL_RES(vkbc_vkAllocateMemory(c_, DEV_RAW(device), &ai, pAllocator, pMemory));
+}
+
+static VKAPI_ATTR void VKAPI_CALL icd_vkFreeMemory(
+    VkDevice device, VkDeviceMemory memory, const VkAllocationCallbacks *pAllocator) {
+    if (!memory) return;
+    ICD_CALL_VOID(vkbc_vkFreeMemory(c_, DEV_RAW(device), memory, pAllocator));
+}
+
+static VKAPI_ATTR VkResult VKAPI_CALL icd_vkMapMemory(
+    VkDevice device, VkDeviceMemory memory, VkDeviceSize offset,
+    VkDeviceSize size, VkMemoryMapFlags flags, void **ppData) {
+    ICD_CALL_RES(vkbc_vkMapMemory(c_, DEV_RAW(device), memory, offset, size, flags, ppData));
+}
+
+static VKAPI_ATTR void VKAPI_CALL icd_vkUnmapMemory(VkDevice device, VkDeviceMemory memory) {
+    if (!memory) return;
+    ICD_CALL_VOID(vkbc_vkUnmapMemory(c_, DEV_RAW(device), memory));
+}
+
+static VKAPI_ATTR VkResult VKAPI_CALL icd_vkFlushMappedMemoryRanges(
+    VkDevice device, uint32_t memoryRangeCount, const VkMappedMemoryRange *pMemoryRanges) {
+    ICD_CALL_RES(vkbc_vkFlushMappedMemoryRanges(c_, DEV_RAW(device), memoryRangeCount, pMemoryRanges));
+}
+
+static VKAPI_ATTR VkResult VKAPI_CALL icd_vkInvalidateMappedMemoryRanges(
+    VkDevice device, uint32_t memoryRangeCount, const VkMappedMemoryRange *pMemoryRanges) {
+    ICD_CALL_RES(vkbc_vkInvalidateMappedMemoryRanges(c_, DEV_RAW(device), memoryRangeCount, pMemoryRanges));
+}
+
+static VKAPI_ATTR void VKAPI_CALL icd_vkGetDeviceMemoryCommitment(
+    VkDevice device, VkDeviceMemory memory, VkDeviceSize *pCommittedMemoryInBytes) {
+    ICD_CALL_VOID(vkbc_vkGetDeviceMemoryCommitment(c_, DEV_RAW(device), memory, pCommittedMemoryInBytes));
+}
+
+/* ---- Buffers & Images ---- */
+
 static VKAPI_ATTR VkResult VKAPI_CALL icd_vkCreateBuffer(
     VkDevice device, const VkBufferCreateInfo *pCreateInfo,
     const VkAllocationCallbacks *pAllocator, VkBuffer *pBuffer) {
     if (!pCreateInfo) return VK_ERROR_INITIALIZATION_FAILED;
     VkBufferCreateInfo bci = *pCreateInfo;
     bci.pNext = NULL;
-    pthread_mutex_lock(&g_mu);
-    vkbc *c = icd_conn_locked();
-    VkResult r = c ? vkbc_vkCreateBuffer(c, DEV_RAW(device), &bci, pAllocator, pBuffer) : VK_ERROR_DEVICE_LOST;
-    pthread_mutex_unlock(&g_mu);
-    return r;
+    ICD_CALL_RES(vkbc_vkCreateBuffer(c_, DEV_RAW(device), &bci, pAllocator, pBuffer));
 }
 
 static VKAPI_ATTR void VKAPI_CALL icd_vkDestroyBuffer(
     VkDevice device, VkBuffer buffer, const VkAllocationCallbacks *pAllocator) {
     if (!buffer) return;
-    pthread_mutex_lock(&g_mu);
-    vkbc *c = icd_conn_locked();
-    if (c) (void)vkbc_vkDestroyBuffer(c, DEV_RAW(device), buffer, pAllocator);
-    pthread_mutex_unlock(&g_mu);
+    ICD_CALL_VOID(vkbc_vkDestroyBuffer(c_, DEV_RAW(device), buffer, pAllocator));
 }
 
 static VKAPI_ATTR void VKAPI_CALL icd_vkGetBufferMemoryRequirements(
     VkDevice device, VkBuffer buffer, VkMemoryRequirements *pMemoryRequirements) {
-    pthread_mutex_lock(&g_mu);
-    vkbc *c = icd_conn_locked();
-    if (c) (void)vkbc_vkGetBufferMemoryRequirements(c, DEV_RAW(device), buffer, pMemoryRequirements);
-    pthread_mutex_unlock(&g_mu);
+    ICD_CALL_VOID(vkbc_vkGetBufferMemoryRequirements(c_, DEV_RAW(device), buffer, pMemoryRequirements));
+}
+
+static VKAPI_ATTR void VKAPI_CALL icd_vkGetBufferMemoryRequirements2(
+    VkDevice device, const VkBufferMemoryRequirementsInfo2 *pInfo, VkMemoryRequirements2 *pMemoryRequirements) {
+    ICD_CALL_VOID(vkbc_vkGetBufferMemoryRequirements2(c_, DEV_RAW(device), pInfo, pMemoryRequirements));
+}
+
+static VKAPI_ATTR VkResult VKAPI_CALL icd_vkBindBufferMemory(
+    VkDevice device, VkBuffer buffer, VkDeviceMemory memory, VkDeviceSize memoryOffset) {
+    ICD_CALL_RES(vkbc_vkBindBufferMemory(c_, DEV_RAW(device), buffer, memory, memoryOffset));
+}
+
+static VKAPI_ATTR VkResult VKAPI_CALL icd_vkBindBufferMemory2(
+    VkDevice device, uint32_t bindInfoCount, const VkBindBufferMemoryInfo *pBindInfos) {
+    ICD_CALL_RES(vkbc_vkBindBufferMemory2(c_, DEV_RAW(device), bindInfoCount, pBindInfos));
 }
 
 static VKAPI_ATTR VkResult VKAPI_CALL icd_vkCreateImage(
@@ -585,28 +760,324 @@ static VKAPI_ATTR VkResult VKAPI_CALL icd_vkCreateImage(
     if (!pCreateInfo) return VK_ERROR_INITIALIZATION_FAILED;
     VkImageCreateInfo ici = *pCreateInfo;
     ici.pNext = NULL;
-    pthread_mutex_lock(&g_mu);
-    vkbc *c = icd_conn_locked();
-    VkResult r = c ? vkbc_vkCreateImage(c, DEV_RAW(device), &ici, pAllocator, pImage) : VK_ERROR_DEVICE_LOST;
-    pthread_mutex_unlock(&g_mu);
-    return r;
+    ICD_CALL_RES(vkbc_vkCreateImage(c_, DEV_RAW(device), &ici, pAllocator, pImage));
 }
 
 static VKAPI_ATTR void VKAPI_CALL icd_vkDestroyImage(
     VkDevice device, VkImage image, const VkAllocationCallbacks *pAllocator) {
     if (!image) return;
-    pthread_mutex_lock(&g_mu);
-    vkbc *c = icd_conn_locked();
-    if (c) (void)vkbc_vkDestroyImage(c, DEV_RAW(device), image, pAllocator);
-    pthread_mutex_unlock(&g_mu);
+    ICD_CALL_VOID(vkbc_vkDestroyImage(c_, DEV_RAW(device), image, pAllocator));
 }
 
 static VKAPI_ATTR void VKAPI_CALL icd_vkGetImageMemoryRequirements(
     VkDevice device, VkImage image, VkMemoryRequirements *pMemoryRequirements) {
+    ICD_CALL_VOID(vkbc_vkGetImageMemoryRequirements(c_, DEV_RAW(device), image, pMemoryRequirements));
+}
+
+static VKAPI_ATTR void VKAPI_CALL icd_vkGetImageMemoryRequirements2(
+    VkDevice device, const VkImageMemoryRequirementsInfo2 *pInfo, VkMemoryRequirements2 *pMemoryRequirements) {
+    ICD_CALL_VOID(vkbc_vkGetImageMemoryRequirements2(c_, DEV_RAW(device), pInfo, pMemoryRequirements));
+}
+
+static VKAPI_ATTR VkResult VKAPI_CALL icd_vkBindImageMemory(
+    VkDevice device, VkImage image, VkDeviceMemory memory, VkDeviceSize memoryOffset) {
+    ICD_CALL_RES(vkbc_vkBindImageMemory(c_, DEV_RAW(device), image, memory, memoryOffset));
+}
+
+static VKAPI_ATTR VkResult VKAPI_CALL icd_vkBindImageMemory2(
+    VkDevice device, uint32_t bindInfoCount, const VkBindImageMemoryInfo *pBindInfos) {
+    ICD_CALL_RES(vkbc_vkBindImageMemory2(c_, DEV_RAW(device), bindInfoCount, pBindInfos));
+}
+
+/* ---- Shader, Descriptors, Pipelines ---- */
+
+static VKAPI_ATTR VkResult VKAPI_CALL icd_vkCreateShaderModule(
+    VkDevice device, const VkShaderModuleCreateInfo *pCreateInfo,
+    const VkAllocationCallbacks *pAllocator, VkShaderModule *pShaderModule) {
+    if (!pCreateInfo) return VK_ERROR_INITIALIZATION_FAILED;
+    VkShaderModuleCreateInfo ci = *pCreateInfo;
+    ci.pNext = NULL;
+    ICD_CALL_RES(vkbc_vkCreateShaderModule(c_, DEV_RAW(device), &ci, pAllocator, pShaderModule));
+}
+
+static VKAPI_ATTR void VKAPI_CALL icd_vkDestroyShaderModule(
+    VkDevice device, VkShaderModule shaderModule, const VkAllocationCallbacks *pAllocator) {
+    if (!shaderModule) return;
+    ICD_CALL_VOID(vkbc_vkDestroyShaderModule(c_, DEV_RAW(device), shaderModule, pAllocator));
+}
+
+static VKAPI_ATTR VkResult VKAPI_CALL icd_vkCreateDescriptorSetLayout(
+    VkDevice device, const VkDescriptorSetLayoutCreateInfo *pCreateInfo,
+    const VkAllocationCallbacks *pAllocator, VkDescriptorSetLayout *pSetLayout) {
+    if (!pCreateInfo) return VK_ERROR_INITIALIZATION_FAILED;
+    VkDescriptorSetLayoutCreateInfo ci = *pCreateInfo;
+    ci.pNext = NULL;
+    ICD_CALL_RES(vkbc_vkCreateDescriptorSetLayout(c_, DEV_RAW(device), &ci, pAllocator, pSetLayout));
+}
+
+static VKAPI_ATTR void VKAPI_CALL icd_vkDestroyDescriptorSetLayout(
+    VkDevice device, VkDescriptorSetLayout descriptorSetLayout, const VkAllocationCallbacks *pAllocator) {
+    if (!descriptorSetLayout) return;
+    ICD_CALL_VOID(vkbc_vkDestroyDescriptorSetLayout(c_, DEV_RAW(device), descriptorSetLayout, pAllocator));
+}
+
+static VKAPI_ATTR VkResult VKAPI_CALL icd_vkCreateDescriptorPool(
+    VkDevice device, const VkDescriptorPoolCreateInfo *pCreateInfo,
+    const VkAllocationCallbacks *pAllocator, VkDescriptorPool *pDescriptorPool) {
+    if (!pCreateInfo) return VK_ERROR_INITIALIZATION_FAILED;
+    VkDescriptorPoolCreateInfo ci = *pCreateInfo;
+    ci.pNext = NULL;
+    ICD_CALL_RES(vkbc_vkCreateDescriptorPool(c_, DEV_RAW(device), &ci, pAllocator, pDescriptorPool));
+}
+
+static VKAPI_ATTR void VKAPI_CALL icd_vkDestroyDescriptorPool(
+    VkDevice device, VkDescriptorPool descriptorPool, const VkAllocationCallbacks *pAllocator) {
+    if (!descriptorPool) return;
+    ICD_CALL_VOID(vkbc_vkDestroyDescriptorPool(c_, DEV_RAW(device), descriptorPool, pAllocator));
+}
+
+static VKAPI_ATTR VkResult VKAPI_CALL icd_vkResetDescriptorPool(
+    VkDevice device, VkDescriptorPool descriptorPool, VkDescriptorPoolResetFlags flags) {
+    ICD_CALL_RES(vkbc_vkResetDescriptorPool(c_, DEV_RAW(device), descriptorPool, flags));
+}
+
+static VKAPI_ATTR VkResult VKAPI_CALL icd_vkAllocateDescriptorSets(
+    VkDevice device, const VkDescriptorSetAllocateInfo *pAllocateInfo, VkDescriptorSet *pDescriptorSets) {
+    if (!pAllocateInfo) return VK_ERROR_INITIALIZATION_FAILED;
+    VkDescriptorSetAllocateInfo ai = *pAllocateInfo;
+    ai.pNext = NULL;
+    ICD_CALL_RES(vkbc_vkAllocateDescriptorSets(c_, DEV_RAW(device), &ai, pDescriptorSets));
+}
+
+static VKAPI_ATTR VkResult VKAPI_CALL icd_vkFreeDescriptorSets(
+    VkDevice device, VkDescriptorPool descriptorPool,
+    uint32_t descriptorSetCount, const VkDescriptorSet *pDescriptorSets) {
+    if (!descriptorSetCount) return VK_SUCCESS;
+    ICD_CALL_RES(vkbc_vkFreeDescriptorSets(c_, DEV_RAW(device), descriptorPool, descriptorSetCount, pDescriptorSets));
+}
+
+static VKAPI_ATTR void VKAPI_CALL icd_vkUpdateDescriptorSets(
+    VkDevice device, uint32_t descriptorWriteCount, const VkWriteDescriptorSet *pDescriptorWrites,
+    uint32_t descriptorCopyCount, const VkCopyDescriptorSet *pDescriptorCopies) {
+    ICD_CALL_VOID(vkbc_vkUpdateDescriptorSets(c_, DEV_RAW(device), descriptorWriteCount, pDescriptorWrites, descriptorCopyCount, pDescriptorCopies));
+}
+
+static VKAPI_ATTR VkResult VKAPI_CALL icd_vkCreatePipelineLayout(
+    VkDevice device, const VkPipelineLayoutCreateInfo *pCreateInfo,
+    const VkAllocationCallbacks *pAllocator, VkPipelineLayout *pPipelineLayout) {
+    if (!pCreateInfo) return VK_ERROR_INITIALIZATION_FAILED;
+    VkPipelineLayoutCreateInfo ci = *pCreateInfo;
+    ci.pNext = NULL;
+    ICD_CALL_RES(vkbc_vkCreatePipelineLayout(c_, DEV_RAW(device), &ci, pAllocator, pPipelineLayout));
+}
+
+static VKAPI_ATTR void VKAPI_CALL icd_vkDestroyPipelineLayout(
+    VkDevice device, VkPipelineLayout pipelineLayout, const VkAllocationCallbacks *pAllocator) {
+    if (!pipelineLayout) return;
+    ICD_CALL_VOID(vkbc_vkDestroyPipelineLayout(c_, DEV_RAW(device), pipelineLayout, pAllocator));
+}
+
+static VKAPI_ATTR VkResult VKAPI_CALL icd_vkCreatePipelineCache(
+    VkDevice device, const VkPipelineCacheCreateInfo *pCreateInfo,
+    const VkAllocationCallbacks *pAllocator, VkPipelineCache *pPipelineCache) {
+    if (!pCreateInfo) return VK_ERROR_INITIALIZATION_FAILED;
+    VkPipelineCacheCreateInfo ci = *pCreateInfo;
+    ci.pNext = NULL;
+    ICD_CALL_RES(vkbc_vkCreatePipelineCache(c_, DEV_RAW(device), &ci, pAllocator, pPipelineCache));
+}
+
+static VKAPI_ATTR void VKAPI_CALL icd_vkDestroyPipelineCache(
+    VkDevice device, VkPipelineCache pipelineCache, const VkAllocationCallbacks *pAllocator) {
+    if (!pipelineCache) return;
+    ICD_CALL_VOID(vkbc_vkDestroyPipelineCache(c_, DEV_RAW(device), pipelineCache, pAllocator));
+}
+
+static VKAPI_ATTR VkResult VKAPI_CALL icd_vkCreateComputePipelines(
+    VkDevice device, VkPipelineCache pipelineCache, uint32_t createInfoCount,
+    const VkComputePipelineCreateInfo *pCreateInfos,
+    const VkAllocationCallbacks *pAllocator, VkPipeline *pPipelines) {
+    ICD_CALL_RES(vkbc_vkCreateComputePipelines(c_, DEV_RAW(device), pipelineCache, createInfoCount, pCreateInfos, pAllocator, pPipelines));
+}
+
+static VKAPI_ATTR void VKAPI_CALL icd_vkDestroyPipeline(
+    VkDevice device, VkPipeline pipeline, const VkAllocationCallbacks *pAllocator) {
+    if (!pipeline) return;
+    ICD_CALL_VOID(vkbc_vkDestroyPipeline(c_, DEV_RAW(device), pipeline, pAllocator));
+}
+
+/* ---- Command Pools & Command Buffers ---- */
+
+static VKAPI_ATTR VkResult VKAPI_CALL icd_vkCreateCommandPool(
+    VkDevice device, const VkCommandPoolCreateInfo *pCreateInfo,
+    const VkAllocationCallbacks *pAllocator, VkCommandPool *pCommandPool) {
+    if (!pCreateInfo) return VK_ERROR_INITIALIZATION_FAILED;
+    VkCommandPoolCreateInfo ci = *pCreateInfo;
+    ci.pNext = NULL;
+    ICD_CALL_RES(vkbc_vkCreateCommandPool(c_, DEV_RAW(device), &ci, pAllocator, pCommandPool));
+}
+
+static VKAPI_ATTR void VKAPI_CALL icd_vkDestroyCommandPool(
+    VkDevice device, VkCommandPool commandPool, const VkAllocationCallbacks *pAllocator) {
+    if (!commandPool) return;
+    icd_device *dev = (icd_device *)device;
     pthread_mutex_lock(&g_mu);
     vkbc *c = icd_conn_locked();
-    if (c) (void)vkbc_vkGetImageMemoryRequirements(c, DEV_RAW(device), image, pMemoryRequirements);
+    if (c) (void)vkbc_vkDestroyCommandPool(c, DEV_RAW(device), commandPool, pAllocator);
+    for (icd_cmdbuf *cb = dev->cmdbufs, *nx; cb; cb = nx) {
+        nx = cb->next;
+        if (cb->pool == commandPool) cmdbuf_unlink_free(dev, cb);
+    }
     pthread_mutex_unlock(&g_mu);
+}
+
+static VKAPI_ATTR VkResult VKAPI_CALL icd_vkResetCommandPool(
+    VkDevice device, VkCommandPool commandPool, VkCommandPoolResetFlags flags) {
+    ICD_CALL_RES(vkbc_vkResetCommandPool(c_, DEV_RAW(device), commandPool, flags));
+}
+
+static VKAPI_ATTR VkResult VKAPI_CALL icd_vkAllocateCommandBuffers(
+    VkDevice device, const VkCommandBufferAllocateInfo *pAllocateInfo, VkCommandBuffer *pCommandBuffers) {
+    if (!device || !pAllocateInfo || !pCommandBuffers) return VK_ERROR_INITIALIZATION_FAILED;
+    uint32_t n = pAllocateInfo->commandBufferCount;
+    if (!n) return VK_SUCCESS;
+    icd_device *dev = (icd_device *)device;
+    VkCommandBufferAllocateInfo ai = *pAllocateInfo;
+    ai.pNext = NULL;
+
+    VkCommandBuffer *raw = calloc(n, sizeof(*raw));
+    icd_cmdbuf **wraps = calloc(n, sizeof(*wraps));
+    if (!raw || !wraps) { free(raw); free(wraps); return VK_ERROR_OUT_OF_HOST_MEMORY; }
+    for (uint32_t i = 0; i < n; i++) {
+        wraps[i] = calloc(1, sizeof(**wraps));
+        if (!wraps[i]) {
+            for (uint32_t j = 0; j < i; j++) free(wraps[j]);
+            free(wraps); free(raw);
+            return VK_ERROR_OUT_OF_HOST_MEMORY;
+        }
+    }
+
+    pthread_mutex_lock(&g_mu);
+    vkbc *c = icd_conn_locked();
+    VkResult r = c ? vkbc_vkAllocateCommandBuffers(c, DEV_RAW(device), &ai, raw) : VK_ERROR_DEVICE_LOST;
+    if (r == VK_SUCCESS) {
+        for (uint32_t i = 0; i < n; i++) {
+            set_loader_magic_value(wraps[i]);
+            wraps[i]->id = (uint64_t)(uintptr_t)raw[i];
+            wraps[i]->pool = ai.commandPool;
+            wraps[i]->next = dev->cmdbufs;
+            if (dev->cmdbufs) dev->cmdbufs->prev = wraps[i];
+            dev->cmdbufs = wraps[i];
+            pCommandBuffers[i] = (VkCommandBuffer)wraps[i];
+        }
+    }
+    pthread_mutex_unlock(&g_mu);
+    if (r != VK_SUCCESS) {
+        for (uint32_t i = 0; i < n; i++) { free(wraps[i]); pCommandBuffers[i] = VK_NULL_HANDLE; }
+    }
+    free(wraps);
+    free(raw);
+    return r;
+}
+
+static VKAPI_ATTR void VKAPI_CALL icd_vkFreeCommandBuffers(
+    VkDevice device, VkCommandPool commandPool,
+    uint32_t commandBufferCount, const VkCommandBuffer *pCommandBuffers) {
+    if (!device || !commandBufferCount || !pCommandBuffers) return;
+    icd_device *dev = (icd_device *)device;
+    VkCommandBuffer *raw = calloc(commandBufferCount, sizeof(*raw));
+    if (!raw) return;
+    for (uint32_t i = 0; i < commandBufferCount; i++) raw[i] = CMDBUF_RAW(pCommandBuffers[i]);
+    pthread_mutex_lock(&g_mu);
+    vkbc *c = icd_conn_locked();
+    if (c) (void)vkbc_vkFreeCommandBuffers(c, DEV_RAW(device), commandPool, commandBufferCount, raw);
+    for (uint32_t i = 0; i < commandBufferCount; i++) {
+        if (pCommandBuffers[i]) cmdbuf_unlink_free(dev, (icd_cmdbuf *)pCommandBuffers[i]);
+    }
+    pthread_mutex_unlock(&g_mu);
+    free(raw);
+}
+
+static VKAPI_ATTR VkResult VKAPI_CALL icd_vkBeginCommandBuffer(
+    VkCommandBuffer commandBuffer, const VkCommandBufferBeginInfo *pBeginInfo) {
+    if (!pBeginInfo) return VK_ERROR_INITIALIZATION_FAILED;
+    VkCommandBufferBeginInfo bi = *pBeginInfo;
+    bi.pNext = NULL;
+    ICD_CALL_RES(vkbc_vkBeginCommandBuffer(c_, CMDBUF_RAW(commandBuffer), &bi));
+}
+
+static VKAPI_ATTR VkResult VKAPI_CALL icd_vkEndCommandBuffer(VkCommandBuffer commandBuffer) {
+    ICD_CALL_RES(vkbc_vkEndCommandBuffer(c_, CMDBUF_RAW(commandBuffer)));
+}
+
+static VKAPI_ATTR VkResult VKAPI_CALL icd_vkResetCommandBuffer(
+    VkCommandBuffer commandBuffer, VkCommandBufferResetFlags flags) {
+    ICD_CALL_RES(vkbc_vkResetCommandBuffer(c_, CMDBUF_RAW(commandBuffer), flags));
+}
+
+/* ---- Recorded vkCmd* compute & transfer commands ---- */
+
+static VKAPI_ATTR void VKAPI_CALL icd_vkCmdBindPipeline(
+    VkCommandBuffer commandBuffer, VkPipelineBindPoint pipelineBindPoint, VkPipeline pipeline) {
+    ICD_CALL_VOID(vkbc_vkCmdBindPipeline(c_, CMDBUF_RAW(commandBuffer), pipelineBindPoint, pipeline));
+}
+
+static VKAPI_ATTR void VKAPI_CALL icd_vkCmdBindDescriptorSets(
+    VkCommandBuffer commandBuffer, VkPipelineBindPoint pipelineBindPoint, VkPipelineLayout layout,
+    uint32_t firstSet, uint32_t descriptorSetCount, const VkDescriptorSet *pDescriptorSets,
+    uint32_t dynamicOffsetCount, const uint32_t *pDynamicOffsets) {
+    ICD_CALL_VOID(vkbc_vkCmdBindDescriptorSets(c_, CMDBUF_RAW(commandBuffer), pipelineBindPoint, layout,
+                                               firstSet, descriptorSetCount, pDescriptorSets,
+                                               dynamicOffsetCount, pDynamicOffsets));
+}
+
+static VKAPI_ATTR void VKAPI_CALL icd_vkCmdPushConstants(
+    VkCommandBuffer commandBuffer, VkPipelineLayout layout, VkShaderStageFlags stageFlags,
+    uint32_t offset, uint32_t size, const void *pValues) {
+    ICD_CALL_VOID(vkbc_vkCmdPushConstants(c_, CMDBUF_RAW(commandBuffer), layout, stageFlags, offset, size, pValues));
+}
+
+static VKAPI_ATTR void VKAPI_CALL icd_vkCmdDispatch(
+    VkCommandBuffer commandBuffer, uint32_t groupCountX, uint32_t groupCountY, uint32_t groupCountZ) {
+    ICD_CALL_VOID(vkbc_vkCmdDispatch(c_, CMDBUF_RAW(commandBuffer), groupCountX, groupCountY, groupCountZ));
+}
+
+static VKAPI_ATTR void VKAPI_CALL icd_vkCmdDispatchBase(
+    VkCommandBuffer commandBuffer, uint32_t baseGroupX, uint32_t baseGroupY, uint32_t baseGroupZ,
+    uint32_t groupCountX, uint32_t groupCountY, uint32_t groupCountZ) {
+    ICD_CALL_VOID(vkbc_vkCmdDispatchBase(c_, CMDBUF_RAW(commandBuffer), baseGroupX, baseGroupY, baseGroupZ,
+                                         groupCountX, groupCountY, groupCountZ));
+}
+
+static VKAPI_ATTR void VKAPI_CALL icd_vkCmdDispatchIndirect(
+    VkCommandBuffer commandBuffer, VkBuffer buffer, VkDeviceSize offset) {
+    ICD_CALL_VOID(vkbc_vkCmdDispatchIndirect(c_, CMDBUF_RAW(commandBuffer), buffer, offset));
+}
+
+static VKAPI_ATTR void VKAPI_CALL icd_vkCmdPipelineBarrier(
+    VkCommandBuffer commandBuffer, VkPipelineStageFlags srcStageMask, VkPipelineStageFlags dstStageMask,
+    VkDependencyFlags dependencyFlags, uint32_t memoryBarrierCount, const VkMemoryBarrier *pMemoryBarriers,
+    uint32_t bufferMemoryBarrierCount, const VkBufferMemoryBarrier *pBufferMemoryBarriers,
+    uint32_t imageMemoryBarrierCount, const VkImageMemoryBarrier *pImageMemoryBarriers) {
+    ICD_CALL_VOID(vkbc_vkCmdPipelineBarrier(c_, CMDBUF_RAW(commandBuffer), srcStageMask, dstStageMask,
+                                            dependencyFlags, memoryBarrierCount, pMemoryBarriers,
+                                            bufferMemoryBarrierCount, pBufferMemoryBarriers,
+                                            imageMemoryBarrierCount, pImageMemoryBarriers));
+}
+
+static VKAPI_ATTR void VKAPI_CALL icd_vkCmdCopyBuffer(
+    VkCommandBuffer commandBuffer, VkBuffer srcBuffer, VkBuffer dstBuffer,
+    uint32_t regionCount, const VkBufferCopy *pRegions) {
+    ICD_CALL_VOID(vkbc_vkCmdCopyBuffer(c_, CMDBUF_RAW(commandBuffer), srcBuffer, dstBuffer, regionCount, pRegions));
+}
+
+static VKAPI_ATTR void VKAPI_CALL icd_vkCmdFillBuffer(
+    VkCommandBuffer commandBuffer, VkBuffer dstBuffer, VkDeviceSize dstOffset, VkDeviceSize size, uint32_t data) {
+    ICD_CALL_VOID(vkbc_vkCmdFillBuffer(c_, CMDBUF_RAW(commandBuffer), dstBuffer, dstOffset, size, data));
+}
+
+static VKAPI_ATTR void VKAPI_CALL icd_vkCmdUpdateBuffer(
+    VkCommandBuffer commandBuffer, VkBuffer dstBuffer, VkDeviceSize dstOffset, VkDeviceSize dataSize, const void *pData) {
+    ICD_CALL_VOID(vkbc_vkCmdUpdateBuffer(c_, CMDBUF_RAW(commandBuffer), dstBuffer, dstOffset, dataSize, pData));
 }
 
 /* ---- ProcAddr tables & Loader-ICD v5 exports ---- */
@@ -669,13 +1140,75 @@ static const proc_ent k_pdev_procs[] = {
 static const proc_ent k_dev_procs[] = {
     ENT("vkGetDeviceProcAddr", icd_vkGetDeviceProcAddr),
     ENT("vkDestroyDevice", icd_vkDestroyDevice),
+    ENT("vkDeviceWaitIdle", icd_vkDeviceWaitIdle),
     ENT("vkGetDeviceQueue", icd_vkGetDeviceQueue),
+    ENT("vkQueueSubmit", icd_vkQueueSubmit),
+    ENT("vkQueueWaitIdle", icd_vkQueueWaitIdle),
+    ENT("vkCreateFence", icd_vkCreateFence),
+    ENT("vkDestroyFence", icd_vkDestroyFence),
+    ENT("vkResetFences", icd_vkResetFences),
+    ENT("vkGetFenceStatus", icd_vkGetFenceStatus),
+    ENT("vkWaitForFences", icd_vkWaitForFences),
+    ENT("vkCreateSemaphore", icd_vkCreateSemaphore),
+    ENT("vkDestroySemaphore", icd_vkDestroySemaphore),
+    ENT("vkAllocateMemory", icd_vkAllocateMemory),
+    ENT("vkFreeMemory", icd_vkFreeMemory),
+    ENT("vkMapMemory", icd_vkMapMemory),
+    ENT("vkUnmapMemory", icd_vkUnmapMemory),
+    ENT("vkFlushMappedMemoryRanges", icd_vkFlushMappedMemoryRanges),
+    ENT("vkInvalidateMappedMemoryRanges", icd_vkInvalidateMappedMemoryRanges),
+    ENT("vkGetDeviceMemoryCommitment", icd_vkGetDeviceMemoryCommitment),
     ENT("vkCreateBuffer", icd_vkCreateBuffer),
     ENT("vkDestroyBuffer", icd_vkDestroyBuffer),
     ENT("vkGetBufferMemoryRequirements", icd_vkGetBufferMemoryRequirements),
+    ENT("vkGetBufferMemoryRequirements2", icd_vkGetBufferMemoryRequirements2),
+    ENT("vkGetBufferMemoryRequirements2KHR", icd_vkGetBufferMemoryRequirements2),
+    ENT("vkBindBufferMemory", icd_vkBindBufferMemory),
+    ENT("vkBindBufferMemory2", icd_vkBindBufferMemory2),
+    ENT("vkBindBufferMemory2KHR", icd_vkBindBufferMemory2),
     ENT("vkCreateImage", icd_vkCreateImage),
     ENT("vkDestroyImage", icd_vkDestroyImage),
     ENT("vkGetImageMemoryRequirements", icd_vkGetImageMemoryRequirements),
+    ENT("vkGetImageMemoryRequirements2", icd_vkGetImageMemoryRequirements2),
+    ENT("vkGetImageMemoryRequirements2KHR", icd_vkGetImageMemoryRequirements2),
+    ENT("vkBindImageMemory", icd_vkBindImageMemory),
+    ENT("vkBindImageMemory2", icd_vkBindImageMemory2),
+    ENT("vkBindImageMemory2KHR", icd_vkBindImageMemory2),
+    ENT("vkCreateShaderModule", icd_vkCreateShaderModule),
+    ENT("vkDestroyShaderModule", icd_vkDestroyShaderModule),
+    ENT("vkCreateDescriptorSetLayout", icd_vkCreateDescriptorSetLayout),
+    ENT("vkDestroyDescriptorSetLayout", icd_vkDestroyDescriptorSetLayout),
+    ENT("vkCreateDescriptorPool", icd_vkCreateDescriptorPool),
+    ENT("vkDestroyDescriptorPool", icd_vkDestroyDescriptorPool),
+    ENT("vkResetDescriptorPool", icd_vkResetDescriptorPool),
+    ENT("vkAllocateDescriptorSets", icd_vkAllocateDescriptorSets),
+    ENT("vkFreeDescriptorSets", icd_vkFreeDescriptorSets),
+    ENT("vkUpdateDescriptorSets", icd_vkUpdateDescriptorSets),
+    ENT("vkCreatePipelineLayout", icd_vkCreatePipelineLayout),
+    ENT("vkDestroyPipelineLayout", icd_vkDestroyPipelineLayout),
+    ENT("vkCreatePipelineCache", icd_vkCreatePipelineCache),
+    ENT("vkDestroyPipelineCache", icd_vkDestroyPipelineCache),
+    ENT("vkCreateComputePipelines", icd_vkCreateComputePipelines),
+    ENT("vkDestroyPipeline", icd_vkDestroyPipeline),
+    ENT("vkCreateCommandPool", icd_vkCreateCommandPool),
+    ENT("vkDestroyCommandPool", icd_vkDestroyCommandPool),
+    ENT("vkResetCommandPool", icd_vkResetCommandPool),
+    ENT("vkAllocateCommandBuffers", icd_vkAllocateCommandBuffers),
+    ENT("vkFreeCommandBuffers", icd_vkFreeCommandBuffers),
+    ENT("vkBeginCommandBuffer", icd_vkBeginCommandBuffer),
+    ENT("vkEndCommandBuffer", icd_vkEndCommandBuffer),
+    ENT("vkResetCommandBuffer", icd_vkResetCommandBuffer),
+    ENT("vkCmdBindPipeline", icd_vkCmdBindPipeline),
+    ENT("vkCmdBindDescriptorSets", icd_vkCmdBindDescriptorSets),
+    ENT("vkCmdPushConstants", icd_vkCmdPushConstants),
+    ENT("vkCmdDispatch", icd_vkCmdDispatch),
+    ENT("vkCmdDispatchBase", icd_vkCmdDispatchBase),
+    ENT("vkCmdDispatchBaseKHR", icd_vkCmdDispatchBase),
+    ENT("vkCmdDispatchIndirect", icd_vkCmdDispatchIndirect),
+    ENT("vkCmdPipelineBarrier", icd_vkCmdPipelineBarrier),
+    ENT("vkCmdCopyBuffer", icd_vkCmdCopyBuffer),
+    ENT("vkCmdFillBuffer", icd_vkCmdFillBuffer),
+    ENT("vkCmdUpdateBuffer", icd_vkCmdUpdateBuffer),
 };
 
 static PFN_vkVoidFunction lookup_proc(const proc_ent *tab, size_t n, const char *name) {

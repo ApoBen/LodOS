@@ -7,4 +7,10 @@
 /* connect to abstract AF_UNIX socket @name (NULL -> "lodos-vk"); NULL + errno on failure */
 vkbc *vkbc_connect(const char *name);
 void vkbc_disconnect(vkbc *c);
+
+#ifdef VKB_CMD_HAS_vkMapMemory
+VkResult vkbc_vkMapMemory(vkbc *c, VkDevice device, VkDeviceMemory memory,
+                          VkDeviceSize offset, VkDeviceSize size,
+                          VkMemoryMapFlags flags, void **ppData);
+#endif
 #endif
