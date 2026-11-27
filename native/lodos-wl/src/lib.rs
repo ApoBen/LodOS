@@ -1,12 +1,26 @@
-//! lodos-wl: minimal Wayland host server (S2 v0, T013/T022).
-//! Globals: wl_compositor, wl_subcompositor, wl_shm, xdg_wm_base, wl_seat (no devices),
-//! wl_output (1080x2400@60).
-//! On wl_surface commit of a wl_shm buffer (XRGB8888/ARGB8888), locks ANativeWindow,
-//! copies pixels (handling stride + channel order), and calls ANativeWindow_unlockAndPost.
+//! lodos-wl: minimal Wayland host server (S2: Android SurfaceView + PC headless backend).
+//!
+//! Globals advertised:
+//! - `wl_compositor` (+ `wl_subcompositor`)
+//! - `wl_shm` (`ARGB8888`, `XRGB8888`, `ABGR8888`, `XBGR8888`)
+//! - `xdg_wm_base` (configure/ack, ping/pong)
+//! - `wl_seat` (pointer + touch + keyboard)
+//! - `wl_output` (+ `zxdg_output_manager_v1`)
+//!
+//! Backends:
+//! - Android (`target_os = "android"`): copies committed SHM buffers to `ANativeWindow` via JNI.
+//! - Headless (`feature = "headless"`): composites toplevel SHM buffers into an in-memory RGBA8888
+//!   `Framebuffer`, with PPM dump hook (`LODOS_WL_DUMP` on `SIGUSR1` or after N frames) and
+//!   synthetic input injection API for automated testing.
+
+#[cfg(feature = "headless")]
+pub mod framebuffer;
+
+#[cfg(feature = "headless")]
+pub use framebuffer::Framebuffer;
 
 use std::{
-    ffi::{c_char, c_int, c_void, CStr, CString},
-    os::unix::net::{SocketAddr, UnixListener, UnixStream},
+    ffi::{c_char, c_int, c_void, CStr},
     path::PathBuf,
     ptr::{self, NonNull},
     sync::{
@@ -19,17 +33,30 @@ use std::{
 };
 
 #[cfg(target_os = "android")]
-use std::os::android::net::SocketAddrExt;
-#[cfg(all(target_os = "linux", not(target_os = "android")))]
-use std::os::linux::net::SocketAddrExt;
+use std::{
+    ffi::CString,
+    os::{
+        android::net::SocketAddrExt,
+        unix::net::{SocketAddr, UnixListener},
+    },
+};
+
+use std::os::unix::net::UnixStream;
 
 use jni_sys::{jobject, jstring, JNIEnv};
 use smithay::{
+    backend::input::{ButtonState, KeyState, TouchSlot},
     delegate_compositor, delegate_output, delegate_seat, delegate_shm, delegate_xdg_shell,
-    input::{Seat, SeatHandler, SeatState},
+    input::{
+        keyboard::{FilterResult, Keycode, XkbConfig},
+        pointer::{ButtonEvent, MotionEvent as PointerMotionEvent},
+        touch::{DownEvent as TouchDownEvent, MotionEvent as TouchMotionEvent, UpEvent as TouchUpEvent},
+        Seat, SeatHandler, SeatState,
+    },
     output::{Mode, Output, PhysicalProperties, Subpixel},
     reexports::{
         calloop::{
+            channel::{Channel, Event as ChannelEvent},
             generic::Generic,
             ping::{make_ping, Ping, PingSource},
             EventLoop, Interest, Mode as CMode, PostAction,
@@ -37,21 +64,29 @@ use smithay::{
         wayland_protocols::xdg::shell::server::xdg_toplevel,
         wayland_server::{
             backend::{ClientData, ClientId, DisconnectReason},
-            protocol::{wl_buffer, wl_seat, wl_shm, wl_surface::WlSurface},
+            protocol::{wl_buffer, wl_output, wl_seat, wl_shm, wl_surface::WlSurface},
             Client, Display, DisplayHandle, ListeningSocket,
         },
     },
-    utils::{Serial, Transform},
+    utils::{Point, Serial, Transform, SERIAL_COUNTER},
     wayland::{
         buffer::BufferHandler,
-        compositor::{self, BufferAssignment, CompositorClientState, CompositorHandler, CompositorState, SurfaceAttributes},
+        compositor::{
+            self, BufferAssignment, CompositorClientState, CompositorHandler, CompositorState,
+            SurfaceAttributes,
+        },
         output::{OutputHandler, OutputManagerState},
-        shell::xdg::{PopupSurface, PositionerState, ToplevelSurface, XdgShellHandler, XdgShellState},
+        shell::xdg::{
+            Configure, PopupSurface, PositionerState, ShellClient, ToplevelSurface, XdgShellHandler,
+            XdgShellState,
+        },
         shm::{with_buffer_contents, BufferData, ShmHandler, ShmState},
     },
 };
 
 pub const DEFAULT_SOCK: &str = "/data/local/tmp/lodos/run/wayland-0";
+pub const DEFAULT_WIDTH: u32 = 1080;
+pub const DEFAULT_HEIGHT: u32 = 2400;
 
 // Android NDK ANativeWindow constants & FFI
 pub const WINDOW_FORMAT_RGBA_8888: i32 = 1;
@@ -114,16 +149,95 @@ fn log_msg(msg: &str) {
     }
 }
 
+/// Control messages injected into the Wayland server event loop (input, ping, PPM dump).
+#[derive(Debug, Clone)]
+pub enum ControlMsg {
+    TouchDown { slot: u32, x: f64, y: f64 },
+    TouchMotion { slot: u32, x: f64, y: f64 },
+    TouchUp { slot: u32 },
+    TouchCancel,
+    PointerMotion { x: f64, y: f64 },
+    PointerButton { button: u32, pressed: bool },
+    /// Linux evdev keycode (e.g. `KEY_A = 30`); Smithay XKB offset (+8) is applied internally.
+    Key { evdev_code: u32, pressed: bool },
+    PingClients,
+    #[cfg(feature = "headless")]
+    DumpPpm(PathBuf),
+}
+
+/// Runtime protocol counters exposed to tests and diagnostics.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct ServerStats {
+    pub ack_configure_count: u64,
+    pub pong_count: u64,
+    pub toplevel_count: u64,
+    pub frame_count: u64,
+    pub dump_count: u64,
+}
+
+#[cfg(feature = "headless")]
+static SIGUSR1_PENDING: AtomicBool = AtomicBool::new(false);
+
+#[cfg(feature = "headless")]
+extern "C" fn handle_sigusr1(_sig: c_int) {
+    SIGUSR1_PENDING.store(true, Ordering::Release);
+}
+
+#[cfg(feature = "headless")]
+pub fn install_sigusr1_handler() {
+    unsafe {
+        let mut sa: libc::sigaction = std::mem::zeroed();
+        sa.sa_sigaction = handle_sigusr1 as *const () as usize;
+        sa.sa_flags = libc::SA_RESTART;
+        libc::sigemptyset(&mut sa.sa_mask);
+        libc::sigaction(libc::SIGUSR1, &sa, ptr::null_mut());
+    }
+}
+
+/// Resolves the default Wayland socket path using `$XDG_RUNTIME_DIR` and `$WAYLAND_DISPLAY`
+/// on non-Android platforms (falling back to `DEFAULT_SOCK`).
+pub fn resolve_default_socket_path() -> PathBuf {
+    #[cfg(not(target_os = "android"))]
+    {
+        let display = std::env::var("WAYLAND_DISPLAY").unwrap_or_else(|_| "wayland-0".into());
+        let display_path = PathBuf::from(&display);
+        if display_path.is_absolute() {
+            return display_path;
+        }
+        if let Ok(xdg) = std::env::var("XDG_RUNTIME_DIR") {
+            if !xdg.is_empty() {
+                return PathBuf::from(xdg).join(display);
+            }
+        }
+    }
+    PathBuf::from(DEFAULT_SOCK)
+}
+
 struct FrameCache {
     width: i32,
     height: i32,
+    #[cfg_attr(not(target_os = "android"), allow(dead_code))]
     win_fmt: i32,
+    #[cfg_attr(not(feature = "headless"), allow(dead_code))]
+    opaque: bool,
     rgba: Vec<u32>,
+}
+
+impl FrameCache {
+    #[cfg(feature = "headless")]
+    fn to_rgba_bytes(&self) -> Vec<u8> {
+        let mut out = Vec::with_capacity(self.rgba.len() * 4);
+        for px in &self.rgba {
+            out.extend_from_slice(&px.to_le_bytes());
+        }
+        out
+    }
 }
 
 struct WinPresenter {
     #[cfg(target_os = "android")]
     win: Option<NonNull<ANativeWindow>>,
+    #[cfg_attr(not(target_os = "android"), allow(dead_code))]
     geom: (i32, i32, i32),
     last_frame: Option<FrameCache>,
     frames_posted: u64,
@@ -162,7 +276,13 @@ impl WinPresenter {
         let _ = new_win;
     }
 
-    fn ingest_and_post(&mut self, frame: FrameCache, shm_fmt: wl_shm::Format, src_stride: i32, convert_us: u64) {
+    fn ingest_and_post(
+        &mut self,
+        frame: FrameCache,
+        shm_fmt: wl_shm::Format,
+        src_stride: i32,
+        convert_us: u64,
+    ) {
         self.last_frame = Some(frame);
         let post_us = self.post_cached_frame();
         let n = self.frames_posted;
@@ -259,14 +379,268 @@ impl Drop for WinPresenter {
     }
 }
 
+#[cfg(feature = "headless")]
+struct SurfacePixels {
+    width: u32,
+    height: u32,
+    rgba: Vec<u8>,
+    opaque: bool,
+}
+
+#[cfg(feature = "headless")]
+struct HeadlessBackend {
+    fb: Arc<Mutex<Framebuffer>>,
+    dump_path: Option<PathBuf>,
+    dump_after_frames: Option<u64>,
+    install_sigusr1: bool,
+}
+
+struct ToplevelLayer {
+    toplevel: ToplevelSurface,
+    position: (i32, i32),
+    size: (i32, i32),
+    #[cfg(feature = "headless")]
+    pixels: Option<SurfacePixels>,
+}
+
 struct App {
     compositor_state: CompositorState,
     xdg_shell_state: XdgShellState,
     shm_state: ShmState,
     seat_state: SeatState<App>,
+    seat: Seat<App>,
     _output_state: OutputManagerState,
+    output: Output,
+    output_size: (i32, i32),
     presenter: Option<Arc<Mutex<WinPresenter>>>,
+    #[cfg(feature = "headless")]
+    headless: Option<HeadlessBackend>,
+    layers: Vec<ToplevelLayer>,
+    shell_clients: Vec<ShellClient>,
+    pointer_pos: Point<f64, smithay::utils::Logical>,
+    stats: Arc<Mutex<ServerStats>>,
     start_instant: Instant,
+}
+
+impl App {
+    fn timestamp_ms(&self) -> u32 {
+        self.start_instant.elapsed().as_millis() as u32
+    }
+
+    fn surface_at(&self, pos: Point<f64, smithay::utils::Logical>) -> Option<(WlSurface, Point<f64, smithay::utils::Logical>)> {
+        // Hit-test mapped toplevels top-to-bottom.
+        for layer in self.layers.iter().rev() {
+            let (ox, oy) = layer.position;
+            let (w, h) = layer.size;
+            if w > 0 && h > 0 {
+                let rx = pos.x - ox as f64;
+                let ry = pos.y - oy as f64;
+                if rx >= 0.0 && ry >= 0.0 && rx < w as f64 && ry < h as f64 {
+                    return Some((layer.toplevel.wl_surface().clone(), (ox as f64, oy as f64).into()));
+                }
+            }
+        }
+        // Fallback to top toplevel if it has not committed a buffer yet.
+        self.layers
+            .last()
+            .map(|l| (l.toplevel.wl_surface().clone(), (l.position.0 as f64, l.position.1 as f64).into()))
+    }
+
+    fn focus_surface(&mut self, surface: Option<WlSurface>) {
+        if let Some(kbd) = self.seat.get_keyboard() {
+            let serial = SERIAL_COUNTER.next_serial();
+            kbd.set_focus(self, surface, serial);
+        }
+    }
+
+    #[cfg(feature = "headless")]
+    fn recomposite_headless(&mut self, count_frame: bool) {
+        let Some(hb) = &self.headless else { return };
+        let frame_num = {
+            let Ok(mut fb) = hb.fb.lock() else { return };
+            fb.clear([0, 0, 0, 255]);
+            for layer in &self.layers {
+                if let Some(px) = &layer.pixels {
+                    fb.blit(
+                        layer.position.0,
+                        layer.position.1,
+                        px.width,
+                        px.height,
+                        &px.rgba,
+                        px.opaque,
+                    );
+                }
+            }
+            if count_frame {
+                fb.inc_frame_count()
+            } else {
+                fb.frame_count()
+            }
+        };
+
+        if count_frame {
+            if let Ok(mut st) = self.stats.lock() {
+                st.frame_count = frame_num;
+            }
+            if let (Some(path), Some(after)) = (&hb.dump_path, hb.dump_after_frames) {
+                if frame_num == after {
+                    let path = path.clone();
+                    self.dump_headless_ppm(&path);
+                }
+            }
+        }
+    }
+
+    #[cfg(feature = "headless")]
+    fn dump_headless_ppm(&mut self, path: &std::path::Path) {
+        let Some(hb) = &self.headless else { return };
+        let res = hb.fb.lock().map(|fb| fb.write_ppm(path));
+        match res {
+            Ok(Ok(())) => {
+                if let Ok(mut st) = self.stats.lock() {
+                    st.dump_count += 1;
+                }
+                log_msg(&format!("lodos-wl: dumped PPM to {}", path.display()));
+            }
+            Ok(Err(e)) => log_msg(&format!("lodos-wl: PPM dump to {} failed: {e}", path.display())),
+            Err(_) => log_msg("lodos-wl: framebuffer mutex poisoned during PPM dump"),
+        }
+    }
+
+    fn handle_control(&mut self, msg: ControlMsg) {
+        let serial = SERIAL_COUNTER.next_serial();
+        let time = self.timestamp_ms();
+        match msg {
+            ControlMsg::TouchDown { slot, x, y } => {
+                let loc: Point<f64, smithay::utils::Logical> = (x, y).into();
+                let focus = self.surface_at(loc);
+                if let Some((surf, _)) = &focus {
+                    self.focus_surface(Some(surf.clone()));
+                }
+                if let Some(touch) = self.seat.get_touch() {
+                    touch.down(
+                        self,
+                        focus,
+                        &TouchDownEvent {
+                            slot: TouchSlot::from(Some(slot)),
+                            location: loc,
+                            serial,
+                            time,
+                        },
+                    );
+                    touch.frame(self);
+                }
+            }
+            ControlMsg::TouchMotion { slot, x, y } => {
+                let loc: Point<f64, smithay::utils::Logical> = (x, y).into();
+                let focus = self.surface_at(loc);
+                if let Some(touch) = self.seat.get_touch() {
+                    touch.motion(
+                        self,
+                        focus,
+                        &TouchMotionEvent {
+                            slot: TouchSlot::from(Some(slot)),
+                            location: loc,
+                            time,
+                        },
+                    );
+                    touch.frame(self);
+                }
+            }
+            ControlMsg::TouchUp { slot } => {
+                if let Some(touch) = self.seat.get_touch() {
+                    touch.up(
+                        self,
+                        &TouchUpEvent {
+                            slot: TouchSlot::from(Some(slot)),
+                            serial,
+                            time,
+                        },
+                    );
+                    touch.frame(self);
+                }
+            }
+            ControlMsg::TouchCancel => {
+                if let Some(touch) = self.seat.get_touch() {
+                    touch.cancel(self);
+                }
+            }
+            ControlMsg::PointerMotion { x, y } => {
+                let loc: Point<f64, smithay::utils::Logical> = (x, y).into();
+                self.pointer_pos = loc;
+                let focus = self.surface_at(loc);
+                if let Some(ptr) = self.seat.get_pointer() {
+                    ptr.motion(
+                        self,
+                        focus,
+                        &PointerMotionEvent {
+                            location: loc,
+                            serial,
+                            time,
+                        },
+                    );
+                    ptr.frame(self);
+                }
+            }
+            ControlMsg::PointerButton { button, pressed } => {
+                if pressed {
+                    if let Some((surf, _)) = self.surface_at(self.pointer_pos) {
+                        self.focus_surface(Some(surf));
+                    }
+                }
+                if let Some(ptr) = self.seat.get_pointer() {
+                    let state = if pressed {
+                        ButtonState::Pressed
+                    } else {
+                        ButtonState::Released
+                    };
+                    ptr.button(
+                        self,
+                        &ButtonEvent {
+                            serial,
+                            time,
+                            button,
+                            state,
+                        },
+                    );
+                    ptr.frame(self);
+                }
+            }
+            ControlMsg::Key { evdev_code, pressed } => {
+                if let Some(kbd) = self.seat.get_keyboard() {
+                    if kbd.current_focus().is_none() {
+                        if let Some(top) = self.layers.last() {
+                            let surf = top.toplevel.wl_surface().clone();
+                            kbd.set_focus(self, Some(surf), SERIAL_COUNTER.next_serial());
+                        }
+                    }
+                    let state = if pressed {
+                        KeyState::Pressed
+                    } else {
+                        KeyState::Released
+                    };
+                    // Smithay expects XKB keycode (evdev + 8) and subtracts 8 on wl_keyboard.key.
+                    kbd.input(
+                        self,
+                        Keycode::new(evdev_code.saturating_add(8)),
+                        state,
+                        serial,
+                        time,
+                        |_, _, _| FilterResult::<()>::Forward,
+                    );
+                }
+            }
+            ControlMsg::PingClients => {
+                for client in &self.shell_clients {
+                    let _ = client.send_ping(SERIAL_COUNTER.next_serial());
+                }
+            }
+            #[cfg(feature = "headless")]
+            ControlMsg::DumpPpm(path) => {
+                self.dump_headless_ppm(&path);
+            }
+        }
+    }
 }
 
 #[derive(Default)]
@@ -336,6 +710,7 @@ fn copy_shm_buffer(pool_ptr: *const u8, pool_len: usize, data: BufferData) -> Re
         width: data.width,
         height: data.height,
         win_fmt,
+        opaque: force_opaque,
         rgba,
     })
 }
@@ -357,29 +732,82 @@ impl CompositorHandler for App {
             (buf, cbs)
         });
 
-        if let Some(BufferAssignment::NewBuffer(buffer)) = buf_assign {
-            if let Some(presenter_arc) = &self.presenter {
-                let t0 = Instant::now();
-                let res = with_buffer_contents(&buffer, |ptr, len, data| {
-                    copy_shm_buffer(ptr, len, data).map(|fc| (fc, data.format, data.stride))
-                });
-                let conv_us = t0.elapsed().as_micros() as u64;
-                match res {
-                    Ok(Ok((fc, fmt, stride))) => {
-                        if let Ok(mut guard) = presenter_arc.lock() {
-                            guard.ingest_and_post(fc, fmt, stride, conv_us);
+        match buf_assign {
+            Some(BufferAssignment::NewBuffer(buffer)) => {
+                #[cfg(feature = "headless")]
+                let need_copy = self.presenter.is_some() || self.headless.is_some();
+                #[cfg(not(feature = "headless"))]
+                let need_copy = self.presenter.is_some();
+
+                if need_copy {
+                    let t0 = Instant::now();
+                    let res = with_buffer_contents(&buffer, |ptr, len, data| {
+                        copy_shm_buffer(ptr, len, data).map(|fc| (fc, data.format, data.stride))
+                    });
+                    let conv_us = t0.elapsed().as_micros() as u64;
+                    match res {
+                        Ok(Ok((fc, fmt, stride))) => {
+                            let (bw, bh) = (fc.width, fc.height);
+                            #[cfg(feature = "headless")]
+                            let headless_px = if self.headless.is_some() {
+                                Some(SurfacePixels {
+                                    width: fc.width as u32,
+                                    height: fc.height as u32,
+                                    rgba: fc.to_rgba_bytes(),
+                                    opaque: fc.opaque,
+                                })
+                            } else {
+                                None
+                            };
+
+                            if let Some(layer) =
+                                self.layers.iter_mut().find(|l| l.toplevel.wl_surface() == surface)
+                            {
+                                layer.size = (bw, bh);
+                                #[cfg(feature = "headless")]
+                                {
+                                    layer.pixels = headless_px;
+                                }
+                            }
+
+                            if let Some(presenter_arc) = &self.presenter {
+                                if let Ok(mut guard) = presenter_arc.lock() {
+                                    guard.ingest_and_post(fc, fmt, stride, conv_us);
+                                }
+                            }
+
+                            #[cfg(feature = "headless")]
+                            if self.headless.is_some() {
+                                self.recomposite_headless(true);
+                            }
                         }
+                        Ok(Err(e)) => log_msg(&format!("lodos-wl: shm copy skip: {e}")),
+                        Err(e) => log_msg(&format!("lodos-wl: with_buffer_contents err: {e:?}")),
                     }
-                    Ok(Err(e)) => log_msg(&format!("lodos-wl: shm copy skip: {e}")),
-                    Err(e) => log_msg(&format!("lodos-wl: with_buffer_contents err: {e:?}")),
+                }
+                // Copy path finished reading SHM pool; release buffer back to client immediately.
+                buffer.release();
+            }
+            Some(BufferAssignment::Removed) => {
+                if let Some(layer) =
+                    self.layers.iter_mut().find(|l| l.toplevel.wl_surface() == surface)
+                {
+                    layer.size = (0, 0);
+                    #[cfg(feature = "headless")]
+                    {
+                        layer.pixels = None;
+                    }
+                }
+                #[cfg(feature = "headless")]
+                if self.headless.is_some() {
+                    self.recomposite_headless(false);
                 }
             }
-            // Copy path finished reading SHM pool; release buffer back to client immediately.
-            buffer.release();
+            None => {}
         }
 
         if !frame_cbs.is_empty() {
-            let ms = self.start_instant.elapsed().as_millis() as u32;
+            let ms = self.timestamp_ms();
             for cb in frame_cbs {
                 cb.done(ms);
             }
@@ -401,16 +829,92 @@ impl XdgShellHandler for App {
     fn xdg_shell_state(&mut self) -> &mut XdgShellState {
         &mut self.xdg_shell_state
     }
+    fn new_client(&mut self, client: ShellClient) {
+        self.shell_clients.push(client);
+    }
+    fn client_destroyed(&mut self, client: ShellClient) {
+        self.shell_clients.retain(|c| c != &client);
+    }
+    fn client_pong(&mut self, _client: ShellClient) {
+        if let Ok(mut st) = self.stats.lock() {
+            st.pong_count += 1;
+        }
+    }
     fn new_toplevel(&mut self, surface: ToplevelSurface) {
         log_msg("lodos-wl: new xdg_toplevel");
+        self.output.enter(surface.wl_surface());
         surface.with_pending_state(|s| {
             s.states.set(xdg_toplevel::State::Activated);
         });
         surface.send_configure();
+        let wl_surf = surface.wl_surface().clone();
+        self.layers.push(ToplevelLayer {
+            toplevel: surface,
+            position: (0, 0),
+            size: (0, 0),
+            #[cfg(feature = "headless")]
+            pixels: None,
+        });
+        if let Ok(mut st) = self.stats.lock() {
+            st.toplevel_count = self.layers.len() as u64;
+        }
+        self.focus_surface(Some(wl_surf));
     }
-    fn new_popup(&mut self, _surface: PopupSurface, _positioner: PositionerState) {}
+    fn ack_configure(&mut self, _surface: WlSurface, _configure: Configure) {
+        if let Ok(mut st) = self.stats.lock() {
+            st.ack_configure_count += 1;
+        }
+    }
+    fn toplevel_destroyed(&mut self, surface: ToplevelSurface) {
+        let wl = surface.wl_surface().clone();
+        self.layers.retain(|l| l.toplevel.wl_surface() != &wl);
+        if let Ok(mut st) = self.stats.lock() {
+            st.toplevel_count = self.layers.len() as u64;
+        }
+        let next_focus = self.layers.last().map(|l| l.toplevel.wl_surface().clone());
+        self.focus_surface(next_focus);
+        #[cfg(feature = "headless")]
+        if self.headless.is_some() {
+            self.recomposite_headless(false);
+        }
+    }
+    fn maximize_request(&mut self, surface: ToplevelSurface) {
+        let sz = self.output_size;
+        surface.with_pending_state(|s| {
+            s.states.set(xdg_toplevel::State::Maximized);
+            s.size = Some(sz.into());
+        });
+        surface.send_configure();
+    }
+    fn unmaximize_request(&mut self, surface: ToplevelSurface) {
+        surface.with_pending_state(|s| {
+            s.states.unset(xdg_toplevel::State::Maximized);
+            s.size = None;
+        });
+        surface.send_configure();
+    }
+    fn fullscreen_request(&mut self, surface: ToplevelSurface, _output: Option<wl_output::WlOutput>) {
+        let sz = self.output_size;
+        surface.with_pending_state(|s| {
+            s.states.set(xdg_toplevel::State::Fullscreen);
+            s.size = Some(sz.into());
+        });
+        surface.send_configure();
+    }
+    fn unfullscreen_request(&mut self, surface: ToplevelSurface) {
+        surface.with_pending_state(|s| {
+            s.states.unset(xdg_toplevel::State::Fullscreen);
+            s.size = None;
+        });
+        surface.send_configure();
+    }
+    fn new_popup(&mut self, surface: PopupSurface, _positioner: PositionerState) {
+        let _ = surface.send_configure();
+    }
     fn grab(&mut self, _surface: PopupSurface, _seat: wl_seat::WlSeat, _serial: Serial) {}
-    fn reposition_request(&mut self, _surface: PopupSurface, _positioner: PositionerState, _token: u32) {}
+    fn reposition_request(&mut self, surface: PopupSurface, _positioner: PositionerState, token: u32) {
+        surface.send_repositioned(token);
+    }
 }
 
 impl SeatHandler for App {
@@ -436,23 +940,46 @@ fn add_client(dh: &mut DisplayHandle, stream: UnixStream) {
     }
 }
 
-fn run_server(
+struct ServerRunArgs {
     path: PathBuf,
+    output_size: (i32, i32),
     presenter: Option<Arc<Mutex<WinPresenter>>>,
+    #[cfg(feature = "headless")]
+    headless: Option<HeadlessBackend>,
+    stats: Arc<Mutex<ServerStats>>,
+    ctrl_rx: Option<Channel<ControlMsg>>,
     stop_ctl: Option<(Arc<AtomicBool>, PingSource)>,
     ready_tx: Option<SyncSender<Result<(), String>>>,
-) -> Result<(), Box<dyn std::error::Error>> {
+}
+
+fn run_server_inner(args: ServerRunArgs) -> Result<(), Box<dyn std::error::Error>> {
+    let ServerRunArgs {
+        path,
+        output_size,
+        presenter,
+        #[cfg(feature = "headless")]
+        headless,
+        stats,
+        ctrl_rx,
+        stop_ctl,
+        ready_tx,
+    } = args;
+
     let setup = (|| -> Result<_, String> {
         if path.as_os_str().len() >= 108 {
             return Err(format!("socket path too long (>=108): {}", path.display()));
         }
         if let Some(dir) = path.parent() {
-            std::fs::create_dir_all(dir).map_err(|e| format!("mkdir {}: {e}", dir.display()))?;
+            if !dir.as_os_str().is_empty() {
+                std::fs::create_dir_all(dir)
+                    .map_err(|e| format!("mkdir {}: {e}", dir.display()))?;
+            }
         }
         let _ = std::fs::remove_file(&path);
         let _ = std::fs::remove_file(format!("{}.lock", path.display()));
 
-        let event_loop: EventLoop<App> = EventLoop::try_new().map_err(|e| format!("EventLoop: {e}"))?;
+        let event_loop: EventLoop<App> =
+            EventLoop::try_new().map_err(|e| format!("EventLoop: {e}"))?;
         let display: Display<App> = Display::new().map_err(|e| format!("Display: {e}"))?;
         let dh = display.handle();
 
@@ -463,20 +990,25 @@ fn run_server(
         );
         let xdg_shell_state = XdgShellState::new::<App>(&dh);
         let mut seat_state = SeatState::new();
-        let _seat: Seat<App> = seat_state.new_wl_seat(&dh, "seat0");
-        let output_state = OutputManagerState::new_with_xdg_output::<App>(&dh);
+        let mut seat: Seat<App> = seat_state.new_wl_seat(&dh, "seat0");
+        seat.add_pointer();
+        seat.add_touch();
+        if let Err(e) = seat.add_keyboard(XkbConfig::default(), 200, 25) {
+            log_msg(&format!("lodos-wl: add_keyboard skipped ({e})"));
+        }
 
+        let output_state = OutputManagerState::new_with_xdg_output::<App>(&dh);
         let output = Output::new(
             "LODOS-1".into(),
             PhysicalProperties {
                 size: (70, 155).into(),
                 subpixel: Subpixel::Unknown,
                 make: "LodOS".into(),
-                model: "fake".into(),
+                model: "virtual".into(),
             },
         );
         let mode = Mode {
-            size: (1080, 2400).into(),
+            size: output_size.into(),
             refresh: 60_000,
         };
         output.create_global::<App>(&dh);
@@ -490,44 +1022,55 @@ fn run_server(
                 log_msg(&format!("lodos-wl: listening on {}", path.display()));
                 let mut dh_accept = dh.clone();
                 handle
-                    .insert_source(Generic::new(listener, Interest::READ, CMode::Level), move |_, l, _| {
-                        while let Some(stream) = l.accept()? {
-                            add_client(&mut dh_accept, stream);
-                        }
-                        Ok(PostAction::Continue)
-                    })
+                    .insert_source(
+                        Generic::new(listener, Interest::READ, CMode::Level),
+                        move |_, l, _| {
+                            while let Some(stream) = l.accept()? {
+                                add_client(&mut dh_accept, stream);
+                            }
+                            Ok(PostAction::Continue)
+                        },
+                    )
                     .map_err(|e| format!("insert listener: {e}"))?;
                 listening += 1;
             }
             Err(e) => log_msg(&format!("lodos-wl: path socket {} failed: {e:?}", path.display())),
         }
 
-        let abs = format!(
-            "lodos-{}",
-            path.file_name().and_then(|n| n.to_str()).unwrap_or("wayland-0")
-        );
-        match SocketAddr::from_abstract_name(abs.as_bytes()).and_then(|a| UnixListener::bind_addr(&a)) {
-            Ok(listener) => {
-                listener
-                    .set_nonblocking(true)
-                    .map_err(|e| format!("set_nonblocking: {e}"))?;
-                log_msg(&format!("lodos-wl: listening on abstract @{abs}"));
-                let mut dh_accept = dh.clone();
-                handle
-                    .insert_source(Generic::new(listener, Interest::READ, CMode::Level), move |_, l, _| {
-                        loop {
-                            match l.accept() {
-                                Ok((stream, _)) => add_client(&mut dh_accept, stream),
-                                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => break,
-                                Err(e) => return Err(e),
-                            }
-                        }
-                        Ok(PostAction::Continue)
-                    })
-                    .map_err(|e| format!("insert abstract listener: {e}"))?;
-                listening += 1;
+        #[cfg(target_os = "android")]
+        {
+            let abs = format!(
+                "lodos-{}",
+                path.file_name().and_then(|n| n.to_str()).unwrap_or("wayland-0")
+            );
+            match SocketAddr::from_abstract_name(abs.as_bytes())
+                .and_then(|a| UnixListener::bind_addr(&a))
+            {
+                Ok(listener) => {
+                    listener
+                        .set_nonblocking(true)
+                        .map_err(|e| format!("set_nonblocking: {e}"))?;
+                    log_msg(&format!("lodos-wl: listening on abstract @{abs}"));
+                    let mut dh_accept = dh.clone();
+                    handle
+                        .insert_source(
+                            Generic::new(listener, Interest::READ, CMode::Level),
+                            move |_, l, _| {
+                                loop {
+                                    match l.accept() {
+                                        Ok((stream, _)) => add_client(&mut dh_accept, stream),
+                                        Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => break,
+                                        Err(e) => return Err(e),
+                                    }
+                                }
+                                Ok(PostAction::Continue)
+                            },
+                        )
+                        .map_err(|e| format!("insert abstract listener: {e}"))?;
+                    listening += 1;
+                }
+                Err(e) => log_msg(&format!("lodos-wl: abstract socket @{abs} failed: {e}")),
             }
-            Err(e) => log_msg(&format!("lodos-wl: abstract socket @{abs} failed: {e}")),
         }
 
         if listening == 0 {
@@ -542,6 +1085,16 @@ fn run_server(
             })
             .map_err(|e| format!("insert display: {e}"))?;
 
+        if let Some(rx) = ctrl_rx {
+            handle
+                .insert_source(rx, |evt, _, app| {
+                    if let ChannelEvent::Msg(msg) = evt {
+                        app.handle_control(msg);
+                    }
+                })
+                .map_err(|e| format!("insert ctrl channel: {e}"))?;
+        }
+
         let stop_flag = if let Some((flag, ping_src)) = stop_ctl {
             handle
                 .insert_source(ping_src, |_, _, _| {})
@@ -551,13 +1104,29 @@ fn run_server(
             None
         };
 
+        #[cfg(feature = "headless")]
+        if let Some(hb) = &headless {
+            if hb.install_sigusr1 {
+                install_sigusr1_handler();
+            }
+        }
+
         let app = App {
             compositor_state,
             xdg_shell_state,
             shm_state,
             seat_state,
+            seat,
             _output_state: output_state,
+            output,
+            output_size,
             presenter,
+            #[cfg(feature = "headless")]
+            headless,
+            layers: Vec::new(),
+            shell_clients: Vec::new(),
+            pointer_pos: (0.0, 0.0).into(),
+            stats,
             start_instant: Instant::now(),
         };
 
@@ -587,19 +1156,271 @@ fn run_server(
                 break;
             }
         }
-        event_loop.dispatch(Some(Duration::from_millis(50)), &mut app)?;
+        #[cfg(feature = "headless")]
+        if SIGUSR1_PENDING.swap(false, Ordering::AcqRel) {
+            if let Some(path) = app
+                .headless
+                .as_ref()
+                .and_then(|hb| hb.dump_path.clone())
+            {
+                app.dump_headless_ppm(&path);
+            }
+        }
+        event_loop.dispatch(Some(Duration::from_millis(20)), &mut app)?;
         let _ = dh_flush.flush_clients();
     }
     let _ = std::fs::remove_file(&path);
+    let _ = std::fs::remove_file(format!("{}.lock", path.display()));
     Ok(())
 }
 
-/// CLI entrypoint used by `src/main.rs` (T013 headless Wayland host).
+/// CLI entrypoint used by `src/main.rs` without the `headless` feature (T013).
 pub fn run_headless(path: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
-    run_server(path, None, None, None)
+    run_server_inner(ServerRunArgs {
+        path,
+        output_size: (DEFAULT_WIDTH as i32, DEFAULT_HEIGHT as i32),
+        presenter: None,
+        #[cfg(feature = "headless")]
+        headless: None,
+        stats: Arc::new(Mutex::new(ServerStats::default())),
+        ctrl_rx: None,
+        stop_ctl: None,
+        ready_tx: None,
+    })
 }
 
-// ---- JNI / C ABI server controller ----
+// ---- Headless backend (PC x86_64 testing & nested compositor bring-up) ----
+
+/// Configuration for the headless in-memory framebuffer backend.
+#[cfg(feature = "headless")]
+#[derive(Debug, Clone)]
+pub struct HeadlessConfig {
+    pub socket_path: PathBuf,
+    pub width: u32,
+    pub height: u32,
+    pub dump_path: Option<PathBuf>,
+    pub dump_after_frames: Option<u64>,
+    pub install_sigusr1: bool,
+}
+
+#[cfg(feature = "headless")]
+impl HeadlessConfig {
+    pub fn new(socket_path: PathBuf) -> Self {
+        Self {
+            socket_path,
+            width: DEFAULT_WIDTH,
+            height: DEFAULT_HEIGHT,
+            dump_path: None,
+            dump_after_frames: None,
+            install_sigusr1: false,
+        }
+    }
+
+    /// Loads defaults from environment (`LODOS_WL_WIDTH`, `LODOS_WL_HEIGHT`,
+    /// `LODOS_WL_DUMP`, `LODOS_WL_DUMP_AFTER`) with `SIGUSR1` enabled.
+    pub fn from_env(socket_path: PathBuf) -> Self {
+        let width = std::env::var("LODOS_WL_WIDTH")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .filter(|&v: &u32| v > 0)
+            .unwrap_or(DEFAULT_WIDTH);
+        let height = std::env::var("LODOS_WL_HEIGHT")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .filter(|&v: &u32| v > 0)
+            .unwrap_or(DEFAULT_HEIGHT);
+        let dump_path = std::env::var("LODOS_WL_DUMP")
+            .ok()
+            .filter(|s| !s.is_empty())
+            .map(PathBuf::from);
+        let dump_after_frames = std::env::var("LODOS_WL_DUMP_AFTER")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .filter(|&v: &u64| v > 0);
+        Self {
+            socket_path,
+            width,
+            height,
+            dump_path,
+            dump_after_frames,
+            install_sigusr1: true,
+        }
+    }
+}
+
+/// Runs the headless Wayland server in the foreground (CLI entrypoint).
+#[cfg(feature = "headless")]
+pub fn run_headless_blocking(config: HeadlessConfig) -> Result<(), Box<dyn std::error::Error>> {
+    let fb = Arc::new(Mutex::new(Framebuffer::new(config.width, config.height)));
+    let headless = HeadlessBackend {
+        fb,
+        dump_path: config.dump_path,
+        dump_after_frames: config.dump_after_frames,
+        install_sigusr1: config.install_sigusr1,
+    };
+    run_server_inner(ServerRunArgs {
+        path: config.socket_path,
+        output_size: (config.width as i32, config.height as i32),
+        presenter: None,
+        headless: Some(headless),
+        stats: Arc::new(Mutex::new(ServerStats::default())),
+        ctrl_rx: None,
+        stop_ctl: None,
+        ready_tx: None,
+    })
+}
+
+/// Handle to a running headless Wayland server on a background thread.
+#[cfg(feature = "headless")]
+pub struct HeadlessServer {
+    socket_path: PathBuf,
+    framebuffer: Arc<Mutex<Framebuffer>>,
+    stats: Arc<Mutex<ServerStats>>,
+    ctrl_tx: smithay::reexports::calloop::channel::Sender<ControlMsg>,
+    stop_flag: Arc<AtomicBool>,
+    ping: Ping,
+    join: Option<JoinHandle<()>>,
+}
+
+#[cfg(feature = "headless")]
+impl HeadlessServer {
+    /// Starts the headless server on a background thread and waits until the socket is ready.
+    pub fn start(config: HeadlessConfig) -> Result<Self, String> {
+        let fb = Arc::new(Mutex::new(Framebuffer::new(config.width, config.height)));
+        let stats = Arc::new(Mutex::new(ServerStats::default()));
+        let (ctrl_tx, ctrl_rx) = smithay::reexports::calloop::channel::channel::<ControlMsg>();
+        let stop_flag = Arc::new(AtomicBool::new(false));
+        let (ping, ping_src) = make_ping().map_err(|e| format!("make_ping: {e}"))?;
+        let (ready_tx, ready_rx) = mpsc::sync_channel(1);
+
+        let socket_path = config.socket_path.clone();
+        let thread_fb = Arc::clone(&fb);
+        let thread_stats = Arc::clone(&stats);
+        let thread_stop = Arc::clone(&stop_flag);
+        let headless = HeadlessBackend {
+            fb: thread_fb,
+            dump_path: config.dump_path,
+            dump_after_frames: config.dump_after_frames,
+            install_sigusr1: config.install_sigusr1,
+        };
+
+        let join = thread::Builder::new()
+            .name("lodos-wl-headless".into())
+            .spawn(move || {
+                if let Err(e) = run_server_inner(ServerRunArgs {
+                    path: config.socket_path,
+                    output_size: (config.width as i32, config.height as i32),
+                    presenter: None,
+                    headless: Some(headless),
+                    stats: thread_stats,
+                    ctrl_rx: Some(ctrl_rx),
+                    stop_ctl: Some((thread_stop, ping_src)),
+                    ready_tx: Some(ready_tx),
+                }) {
+                    log_msg(&format!("lodos-wl: headless server exited with error: {e}"));
+                }
+            })
+            .map_err(|e| format!("spawn thread: {e}"))?;
+
+        match ready_rx.recv_timeout(Duration::from_secs(5)) {
+            Ok(Ok(())) => Ok(Self {
+                socket_path,
+                framebuffer: fb,
+                stats,
+                ctrl_tx,
+                stop_flag,
+                ping,
+                join: Some(join),
+            }),
+            Ok(Err(e)) => {
+                let _ = join.join();
+                Err(e)
+            }
+            Err(e) => Err(format!("timeout waiting for headless server ready: {e}")),
+        }
+    }
+
+    pub fn socket_path(&self) -> &std::path::Path {
+        &self.socket_path
+    }
+
+    pub fn framebuffer(&self) -> Arc<Mutex<Framebuffer>> {
+        Arc::clone(&self.framebuffer)
+    }
+
+    pub fn pixel(&self, x: u32, y: u32) -> Option<[u8; 4]> {
+        self.framebuffer.lock().ok().and_then(|fb| fb.pixel(x, y))
+    }
+
+    pub fn frame_count(&self) -> u64 {
+        self.framebuffer.lock().map(|fb| fb.frame_count()).unwrap_or(0)
+    }
+
+    pub fn stats(&self) -> ServerStats {
+        self.stats.lock().map(|s| *s).unwrap_or_default()
+    }
+
+    pub fn send_control(&self, msg: ControlMsg) {
+        let _ = self.ctrl_tx.send(msg);
+    }
+
+    pub fn inject_touch_down(&self, slot: u32, x: f64, y: f64) {
+        self.send_control(ControlMsg::TouchDown { slot, x, y });
+    }
+
+    pub fn inject_touch_motion(&self, slot: u32, x: f64, y: f64) {
+        self.send_control(ControlMsg::TouchMotion { slot, x, y });
+    }
+
+    pub fn inject_touch_up(&self, slot: u32) {
+        self.send_control(ControlMsg::TouchUp { slot });
+    }
+
+    pub fn inject_touch_cancel(&self) {
+        self.send_control(ControlMsg::TouchCancel);
+    }
+
+    pub fn inject_pointer_motion(&self, x: f64, y: f64) {
+        self.send_control(ControlMsg::PointerMotion { x, y });
+    }
+
+    pub fn inject_pointer_button(&self, button: u32, pressed: bool) {
+        self.send_control(ControlMsg::PointerButton { button, pressed });
+    }
+
+    pub fn inject_key(&self, evdev_code: u32, pressed: bool) {
+        self.send_control(ControlMsg::Key { evdev_code, pressed });
+    }
+
+    pub fn ping_clients(&self) {
+        self.send_control(ControlMsg::PingClients);
+    }
+
+    pub fn dump_ppm(&self, path: impl AsRef<std::path::Path>) -> std::io::Result<()> {
+        let fb = self
+            .framebuffer
+            .lock()
+            .map_err(|_| std::io::Error::other("framebuffer mutex poisoned"))?;
+        fb.write_ppm(path.as_ref())
+    }
+
+    pub fn shutdown(&mut self) {
+        self.stop_flag.store(true, Ordering::Release);
+        self.ping.ping();
+        if let Some(j) = self.join.take() {
+            let _ = j.join();
+        }
+    }
+}
+
+#[cfg(feature = "headless")]
+impl Drop for HeadlessServer {
+    fn drop(&mut self) {
+        self.shutdown();
+    }
+}
+
+// ---- Android JNI / C ABI server controller ----
 
 struct ServerController {
     sock_path: PathBuf,
@@ -633,11 +1454,16 @@ fn server_slot() -> &'static Mutex<Option<ServerController>> {
 }
 
 fn start_with_window(sock_path: PathBuf, win: Option<NonNull<ANativeWindow>>) -> Result<(), String> {
-    let mut guard = server_slot().lock().map_err(|_| "server mutex poisoned".to_string())?;
+    let mut guard = server_slot()
+        .lock()
+        .map_err(|_| "server mutex poisoned".to_string())?;
 
     if let Some(ctrl) = guard.as_mut() {
         if ctrl.sock_path == sock_path && ctrl.is_alive() {
-            log_msg(&format!("lodos-wl: updating ANativeWindow on active server {}", sock_path.display()));
+            log_msg(&format!(
+                "lodos-wl: updating ANativeWindow on active server {}",
+                sock_path.display()
+            ));
             if let Ok(mut p) = ctrl.presenter.lock() {
                 p.set_window(win);
             }
@@ -659,12 +1485,17 @@ fn start_with_window(sock_path: PathBuf, win: Option<NonNull<ANativeWindow>>) ->
     let join = thread::Builder::new()
         .name("lodos-wl".into())
         .spawn(move || {
-            if let Err(e) = run_server(
-                thread_path,
-                Some(thread_presenter),
-                Some((thread_stop, ping_src)),
-                Some(ready_tx),
-            ) {
+            if let Err(e) = run_server_inner(ServerRunArgs {
+                path: thread_path,
+                output_size: (DEFAULT_WIDTH as i32, DEFAULT_HEIGHT as i32),
+                presenter: Some(thread_presenter),
+                #[cfg(feature = "headless")]
+                headless: None,
+                stats: Arc::new(Mutex::new(ServerStats::default())),
+                ctrl_rx: None,
+                stop_ctl: Some((thread_stop, ping_src)),
+                ready_tx: Some(ready_tx),
+            }) {
                 log_msg(&format!("lodos-wl: server exited with error: {e}"));
             }
         })

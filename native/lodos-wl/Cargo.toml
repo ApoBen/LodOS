@@ -13,9 +13,18 @@ crate-type = ["cdylib", "rlib"]
 name = "lodos-wl"
 path = "src/main.rs"
 
+[features]
+default = []
+headless = []
+
 [dependencies]
 jni-sys = "0.4"
+libc = "0.2"
 smithay = { version = "0.7", default-features = false, features = ["wayland_frontend"] }
+
+[dev-dependencies]
+wayland-client = "0.31"
+wayland-protocols = { version = "0.32", features = ["client"] }
 
 [profile.release]
 strip = true
