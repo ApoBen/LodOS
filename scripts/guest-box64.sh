@@ -50,6 +50,9 @@ if [ ! -x /opt/x64root/usr/bin/hello ] || [ ! -x /opt/x64root/bin/bash ]; then
 fi
 
 # 3) Version + functional checks + benchmark
+# Keep BOX64_LOG=0 and BOX64_NOBANNER=1: box64 logs to stdout, which sets byte-oriented
+# stdio on stdout and causes wide-oriented __wprintf_chk (used by GNU hello) to return -1.
+export BOX64_LOG=0
 export BOX64_NOBANNER=1
 export BOX64_LD_LIBRARY_PATH=/opt/x64root/usr/lib/x86_64-linux-gnu:/opt/x64root/lib/x86_64-linux-gnu:/usr/x86_64-linux-gnu/lib
 export BOX64_PATH=/opt/x64root/usr/bin:/opt/x64root/bin
