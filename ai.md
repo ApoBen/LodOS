@@ -37,6 +37,7 @@ D15 app sockets: path AF_UNIX under <filesDir>/run (T017); adb spikes keep abstr
 D16 keep >=2 needs_phone:no tasks queued so runner doesn't idle/poweroff when phone drops
 D17 desktop bring-up on PC first (x86_64 guest + lodos-wl headless, pixman) then port to phone; PNG screenshots in docs/screens/
 D18 WSI lives guest-side in ICD (surface/swapchain local objects, present=readback->wl_shm now, AHB later); host never sees WSI
+D19 audio v0 = guest pulseaudio raw-PCM unix sink -> Rust lodos-audio -> AAudio (T049); pipewire later
 D10 own repo of custom builds (mesa/zink, bridge, box64, fex, wine, dxvk)
 
 ## HARD LIMITS (unsolvable rootless)
@@ -99,9 +100,12 @@ P5 generalize + github + CI
 [x] T042 lodos-wl ctl socket + tools/wlctl.py inject; phosh unlock(pam_permit)->grid->foot tap+type, 3 PNGs verified (claude-impl)
 [ ] T043 phosh on phone adb spike (aarch64 guest, lodos-wl headless bionic), PNG (neon, phone)
 [x] T044 lite/ pkg: tier classify+profile+guest env/gsettings, 9 JVM tests; not wired to launch (claude-impl)
-[ ] T045 PC guest via lodos-init PID1 -> dbus/elogind/phoc/phosh PNG (neon, no phone)
-[ ] T046 P1 GuestLaunch.kt proot argv/env/binds + lite env, >=8 JVM tests, ProbeActivity uses it (neon, no phone)
+[x] T045 PC guest via lodos-init PID1 -> phosh lockscreen PNG, clean reverse stop (scripts/pc-guest-init.sh) (claude-impl)
+[x] T046 P1 GuestLaunch.kt argv/env/binds, 14 JVM tests, ProbeActivity uses it; not phone-tested (claude-impl)
 [ ] T047 S1 guest-side WSI in ICD (wayland surface+swapchain -> readback -> wl_shm), PC vk app on lodos-wl PNG (carbon, no phone)
+[ ] T048 P1 GuestSessionService FGS: lodos-init PID1 lifecycle/restart/logs -> bugreport (neon, no phone)
+[ ] T049 S5 audio spike PC: guest pulse simple-protocol -> Rust lodos-audio (wav; AAudio stub) (carbon, no phone)
+[ ] T050 PC phosh app smoke: launch foot/text-editor/calculator, PNG each, toplevels ctl (neon, no phone)
 (live status: task files frontmatter)
 
 ## OPEN (need user)
@@ -110,6 +114,7 @@ P5 generalize + github + CI
 (none)
 
 ## LOG (newest first, 1 line each)
+2026-11-27 review21: T045,T046 ok (accept PASS; PNG lockscreen via lodos-init PID1; 14 JVM tests); phone off adb; +T048 session FGS, T049 audio, T050 app smoke (PC-only); D19
 2026-11-27 review20: T042,T044 ok (accept PASS; PNGs grid+foot verified; 9 JVM tests); phone off adb; +T046 GuestLaunch, T047 ICD WSI (PC-only); D18
 2026-11-27 review19: T040,T041 ok (accept PASS: 7 JVM tests; syncfd SYNC_FD+OPAQUE on Arc); phone off adb; +T044 lite mode core, T045 lodos-init PID1 PC phosh (PC-only)
 2026-11-27 review18: T038,T039 ok (accept PASS; PNG verified phosh lockscreen = first desktop); +T042 unlock/grid via inject, T043 phosh on phone
