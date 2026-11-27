@@ -47,11 +47,16 @@ for _ in $(seq 50); do [ -S "$SOCKDIR/audio.sock" ] && break; sleep 0.1; done
 
 # guest: pulse (no default.pa) with pipe-sink paced by system clock; suspend-on-idle -> no traffic when idle
 if [ "$RELAY_MODE" = native ]; then
-  EXTRA_BINDS="-b $SOCKDIR:/run/lodos-audio -b $ROOT/build/audio-relay/x86_64:/run/lodos-audio-bin"
+  EXTRA_BINDS="-b $SOCKDIR:/run/lodos-audio -b $ROOT/build/audio-relay/x86_64/lodos-audio-relay:/usr/lib/lodos/lodos-audio-relay"
 else
   EXTRA_BINDS="-b $SOCKDIR:/run/lodos-audio"
 fi
-LODOS_AUDIO_RELAY="$RELAY_MODE" EXTRA_BINDS="$EXTRA_BINDS" bash scripts/pc-guest.sh run /bin/bash -c '
+if [ "$RELAY_MODE" = native ]; then
+  GUEST_RELAY=/usr/lib/lodos/lodos-audio-relay
+else
+  GUEST_RELAY=/not-installed/lodos-audio-relay
+fi
+LODOS_AUDIO_RELAY="$GUEST_RELAY" EXTRA_BINDS="$EXTRA_BINDS" bash scripts/pc-guest.sh run /bin/bash -c '
 set -e
 rm -rf /tmp/lodos-pa; mkdir -p /tmp/lodos-pa
 F=/tmp/lodos-pa/sink.fifo; S=/tmp/lodos-pa/native.sock
@@ -64,10 +69,17 @@ pulseaudio -n --daemonize=no --exit-idle-time=-1 --use-pid-file=no --realtime=no
 PA=$!
 for i in $(seq 100); do [ -S $S ] && [ -p $F ] && break; sleep 0.1; done
 [ -S $S ] || { echo "pulse failed"; cat /tmp/lodos-pa/pa.log; exit 1; }
-if [ "$LODOS_AUDIO_RELAY" = socat ]; then
-  socat -u OPEN:$F,rdonly UNIX-CONNECT:/run/lodos-audio/audio.sock &
+if [ -n "$LODOS_AUDIO_RELAY" ] && [ -x "$LODOS_AUDIO_RELAY" ]; then
+  RELAY_BIN=$LODOS_AUDIO_RELAY
+elif [ -x /usr/lib/lodos/lodos-audio-relay ]; then
+  RELAY_BIN=/usr/lib/lodos/lodos-audio-relay
 else
-  /run/lodos-audio-bin/lodos-audio-relay --fifo "$F" --sock /run/lodos-audio/audio.sock &
+  RELAY_BIN=
+fi
+if [ -n "$RELAY_BIN" ]; then
+  "$RELAY_BIN" --fifo "$F" --sock /run/lodos-audio/audio.sock &
+else
+  socat -u OPEN:$F,rdonly UNIX-CONNECT:/run/lodos-audio/audio.sock &
 fi
 RELAY=$!
 sleep 0.5

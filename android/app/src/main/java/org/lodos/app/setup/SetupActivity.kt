@@ -98,11 +98,9 @@ class SetupActivity : Activity() {
         sessionStartButton = findViewById(R.id.setup_btn_session_start)
         sessionStopButton = findViewById(R.id.setup_btn_session_stop)
 
-        val onDiskReady = isRootfsPresentOnDisk()
-        repo = FakeRootfsRepo(
-            initiallyInstalled = onDiskReady,
-            stepDelayMs = 150L
-        )
+        repo = if (BuildConfig.DEBUG && intent.getStringExtra("fake_repo") == "1") {
+            FakeRootfsRepo(initiallyInstalled = isRootfsPresentOnDisk(), stepDelayMs = 150L)
+        } else HttpRootfsRepo(this)
         val store = SharedPreferencesSetupStore(
             getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
         )
@@ -113,7 +111,7 @@ class SetupActivity : Activity() {
         installer = RootfsInstaller(
             machine = machine,
             repo = repo,
-            spec = DEFAULT_ROOTFS_SPEC
+            spec = if (repo is HttpRootfsRepo) HttpRootfsRepo.rootfsSpec(this) else RootfsSpec("", "", "test")
         )
 
         backButton.setOnClickListener {
@@ -284,10 +282,5 @@ class SetupActivity : Activity() {
     companion object {
         private const val REQUEST_NOTIFICATIONS = 5201
         private const val PREFS_NAME = "lodos_setup"
-        private val DEFAULT_ROOTFS_SPEC = RootfsSpec(
-            url = "https://images.linuxcontainers.org/images/debian/trixie/arm64/default/rootfs.tar.xz",
-            sha256 = "0000000000000000000000000000000000000000000000000000000000000000",
-            version = "debian-trixie-arm64"
-        )
     }
 }

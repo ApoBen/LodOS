@@ -1,0 +1,5 @@
+{
+  "_note": "Placeholder URLs and zero digests are deliberate until a project-hosted, immutable archive and verified checksum are published.",
+  "arm64": {"url":"https://example.invalid/lodos/debian-trixie-arm64.tar.gz","sha256":"0000000000000000000000000000000000000000000000000000000000000000","version":"debian-trixie-arm64"},
+  "x86_64": {"url":"https://example.invalid/lodos/debian-trixie-amd64.tar.gz","sha256":"0000000000000000000000000000000000000000000000000000000000000000","version":"debian-trixie-x86_64"}
+}

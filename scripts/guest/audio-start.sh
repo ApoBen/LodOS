@@ -11,7 +11,18 @@ for i in $(seq 1 100); do
   sleep 0.1
 done
 [ -S /run/lodos/pulse/native.sock ] && [ -p /run/lodos/pulse/sink.fifo ] || exit 1
-socat -u OPEN:/run/lodos/pulse/sink.fifo,rdonly UNIX-CONNECT:/run/lodos/audio.sock &
+if [ -n "${LODOS_AUDIO_RELAY:-}" ] && [ -x "$LODOS_AUDIO_RELAY" ]; then
+  RELAY=$LODOS_AUDIO_RELAY
+elif [ -x /usr/lib/lodos/lodos-audio-relay ]; then
+  RELAY=/usr/lib/lodos/lodos-audio-relay
+else
+  RELAY=
+fi
+if [ -n "$RELAY" ]; then
+  "$RELAY" --fifo /run/lodos/pulse/sink.fifo --sock /run/lodos/audio.sock &
+else
+  socat -u OPEN:/run/lodos/pulse/sink.fifo,rdonly UNIX-CONNECT:/run/lodos/audio.sock &
+fi
 RELAY_PID=$!
 cleanup() {
   kill "$RELAY_PID" "$PA_PID" 2>/dev/null || true
