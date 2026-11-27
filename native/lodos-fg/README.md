@@ -13,3 +13,7 @@ Reuse check: vkBasalt (`https://github.com/DadSchoorse/vkBasalt`, inspected at `
 | performance | 2.0x | 960x540 |
 
 Build with CMake, Vulkan development files, `glslangValidator`, and libpng. The offscreen executable is a headless Vulkan proof and writes `docs/screens/T068-fsr1.png`.
+
+## layer usage
+
+`VK_LAYER_LODOS_fg` is built beside `liblodos_fg.so`. Enable it with `LODOS_FG=1`, `VK_LAYER_PATH` set to the build directory, and `VK_INSTANCE_LAYERS=VK_LAYER_LODOS_fg`. `LODOS_FG_PRESET` accepts quality (1.5x), balanced (1.7x), or performance (2x); `LODOS_FG_SHARPNESS` defaults to 0.2. `LODOS_FG_DUMP` and `LODOS_FG_DUMP_FRAME` select a diagnostic dump and frame number. The dispatch and loader-chain pattern follows Mesa's Vulkan vram-report-limit layer (MIT, `third_party/src/mesa-kopper/src/vulkan/vram-report-limit-layer`); no Mesa source is copied.

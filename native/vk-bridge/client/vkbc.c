@@ -77,7 +77,7 @@ VkResult vkbc__batch_flush(vkbc *c, uint64_t cmdbuf) {
     uint8_t *p = c->req; uint32_t cmd = VKB_CMD_STREAM, sz = (uint32_t)n;
     memcpy(p, &cmd, 4); memcpy(p + 4, &sz, 4);
     if (n) memcpy(p + 8, b->data, n);
-    const uint8_t *rep; size_t replen;
+    const uint8_t *rep = NULL; size_t replen = 0;
     if (vkbc__call(c, n + 8, &rep, &replen) < 0) return VK_ERROR_DEVICE_LOST;
     vkr_rd r = { rep, replen, 0, 0, NULL, NULL };
     if (vkr_get_u32(&r) != VKB_CMD_STREAM) return VK_ERROR_UNKNOWN;

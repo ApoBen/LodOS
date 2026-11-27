@@ -40,6 +40,6 @@ VKAPI_ATTR VkResult VKAPI_CALL vkNegotiateLoaderLayerInterfaceVersion(VkNegotiat
  if(v->loaderLayerInterfaceVersion>2) v->loaderLayerInterfaceVersion=2;
  v->pfnGetInstanceProcAddr=vkGetInstanceProcAddr;
  v->pfnGetDeviceProcAddr=(PFN_vkGetDeviceProcAddr)vkGetInstanceProcAddr;
- v->pfnGetPhysicalDeviceProcAddr=(PFN_vkGetPhysicalDeviceProcAddr)vkGetInstanceProcAddr;
+ v->pfnGetPhysicalDeviceProcAddr=(PFN_GetPhysicalDeviceProcAddr)vkGetInstanceProcAddr;
  return VK_SUCCESS;
 }
