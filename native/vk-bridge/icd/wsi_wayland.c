@@ -517,7 +517,11 @@ static VkResult wsi_present_one(VkQueue queue, wsi_swapchain *sc, uint32_t idx,
     wl.marshal_flags(ws, 6 /* wl_surface.commit */, NULL, sv, 0);
     im->busy = 1;
     if (wl.flush(dpy) < 0) return VK_ERROR_SURFACE_LOST_KHR;
-    __atomic_add_fetch(&g_wsi_presents, 1, __ATOMIC_RELAXED);
+    uint64_t np = __atomic_add_fetch(&g_wsi_presents, 1, __ATOMIC_RELAXED);
+    static long every = -1; /* LODOS_VK_WSI_STATS_EVERY=N: periodic stat (apps killed by signal skip dtor) */
+    if (every < 0) { const char *e = getenv("LODOS_VK_WSI_STATS_EVERY"); every = e ? atol(e) : 0; }
+    if (every > 0 && np % (uint64_t)every == 0)
+        fprintf(stderr, "[lodos-icd] wsi presents=%llu\n", (unsigned long long)np);
     return VK_SUCCESS;
 }
 
