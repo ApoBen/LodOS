@@ -41,6 +41,7 @@ D19 audio v0 = guest pulseaudio raw-PCM unix sink -> Rust lodos-audio -> AAudio 
 D20 lodos-fg started early (T068, offscreen FSR1 core) as pure-PC lane filler; present hook after
 D21 runner pcdisplay detection greps task text -> non-display tasks must avoid words lodos-wl/phoc/phosh/wayland(lowercase)/pc-guest
 D22 implementer sandboxes may lack GPU: never add SwiftShader/llvmpipe fallbacks to GPU harnesses; GPU proof only from runner accept (real GPU); accepts reject sw renderers
+D23 S1 GPU path stays vk-bridge; Venus/vtest not adopted (T055: virgl Android build blocked on epoxy, no perf data); revisit only if bridge hits a wall
 D10 own repo of custom builds (mesa/zink, bridge, box64, fex, wine, dxvk)
 
 ## HARD LIMITS (unsolvable rootless)
@@ -86,7 +87,7 @@ P5 generalize + github + CI
 [P] T025 S3 sessions PARKED (status user): session id ok, Inhibit FileNotFound (.ref FIFO); phosh fine w/o it; revisit P1 polish
 [x] T026 P1 native rootfs extract via JNI lodos-rootfs at app uid: 199s -> 1.95s cold; apt+hello ok, total 37s (codex)
 [x] T027 S1 v1: guest compute+triangle via bridge on phone OK (92 calls); a6 fixed T023 staging (.inc) (codex)
-[ ] T028 S2 v1: app-uid guest weston-simple-shm -> DisplayActivity; a2 script fixed, blocked on phone off adb (not quality), max5
+[x] T028 S2 v1: app-uid guest weston-simple-shm -> DisplayActivity on phone, 120f ~50fps, PNG docs/screens/T028-phone-guest-display.png (codex)
 [x] T029 S1 ICD 92 cmds, memfd-shadow mapped mem, PC-host compute e2e via ICD on Intel Arc OK
 [x] T030 P1 wizard skeleton: SetupStateMachine+RootfsInstaller(fake repo)+SetupActivity, 11 JVM tests
 [x] T031 D3 native/lodos-init (init+systemctl shim, 14 cargo tests); bionic build only -> guest needs musl/gnu target
@@ -113,8 +114,8 @@ P5 generalize + github + CI
 [x] T052 session UI Start/Stop + POST_NOTIFICATIONS + SessionUiModel, 6 JVM tests (codex)
 [x] T053 lite mode wired into GuestLaunch (env + gsettings bind), 5 JVM tests (codex)
 [x] T054 audio in APK: lodos-audio staged, AudioBridge in FGS, guest pulse cfg, 4 JVM tests; phone playback untested (codex)
-[ ] T055 S1-alt Venus+virglrenderer vtest vs vk-bridge; a2: virgl needs epoxy+log.h, bridge proxy no server; accept pgrep fixed; max5 (phone)
-[ ] T056 S1-alt in-process Vulkan wrapper ICD on phone vs vk-bridge (neon, phone, after T043)
+[x] T055 S1-alt Venus: virgl NDK build stops at epoxy; bridge offscreen proxy 6.2 runs/s; verdict: do not adopt vtest now (D23) (codex)
+[~] T056 S1-alt in-process Vulkan wrapper ICD on phone vs vk-bridge (grok a1, phone)
 [ ] T057 P1 "Linux Terminal" 2nd launcher icon: TerminalActivity (termux terminal libs) -> guest bash PTY, no phosh (neon, phone)
 [x] T058 vkCmd* batching per cmdbuf (flush at End), VKB_NO_BATCH fallback; Arc 120 vs 129 calls; blocked was accept regex bug (reviewer fixed+reran) (codex)
 [x] T059 static musl lodos-audio-relay replaces socat on PC (R24 PC-side); APK side -> T061 (codex)
@@ -127,11 +128,13 @@ P5 generalize + github + CI
 [x] T066 P1 input: DisplayActivity touch/key -> JNI -> seat, 11 cargo + JVM tests; phone untested (codex)
 [x] T067 R25 mesa kopper/zink wayland w/o render node: patch + eglgears PNG on Arc; blocked was harness SwiftShader fallback (reviewer fixed) (codex)
 [x] T068 lodos-fg v0 FSR1 EASU+RCAS on Arc: grad energy 0.017 vs bilinear 0.007, PNG (codex)
-[ ] T069 lodos-fg v1a: layer skeleton rewrite (crash=recursion via mesa device_select) + caps scaling (carbon, pure PC)
+[~] T069 lodos-fg v1a: reviewer fixed recursion (-Wl,-Bsymbolic), steps1+2 PASS; caps scaling still 1280x720 -> REVIEW debug hints, max6 (grok)
 [ ] T071 lodos-fg v1b: proxy swapchain + FSR1 at present + PNG dump (carbon, pure PC, after T069)
 [x] T070 P1 SettingsActivity lite+fg preset -> GuestLaunch env, 6 JVM tests (codex)
-[ ] T072 P1 onboarding: phantom killer + battery opt + HyperOS hints, JVM tests (neon, gradle)
-[ ] T073 PC GPU desktop: phoc gles2/vulkan on zink via ICD (Arc), phosh PNG (carbon, pcdisplay)
+[x] T072 P1 onboarding: phantom killer/battery/HyperOS guide, 8 JVM tests (codex)
+[~] T073 PC GPU desktop: phoc gles2/vulkan on zink via ICD (Arc), phosh PNG (carbon, pcdisplay, grok a1)
+[ ] T074 P1 "Start desktop": DesktopLaunchPlan + DisplayActivity client=session, >=6 JVM tests (neon, gradle)
+[ ] T075 P2 research Winlator/GameNative presets + license -> data/compat/presets.json (carbon, pure PC)
 (live status: task files frontmatter)
 
 ## OPEN (need user)
@@ -146,6 +149,7 @@ P5 generalize + github + CI
 (none)
 
 ## LOG (newest first, 1 line each)
+2026-11-28 review32: T028 ok (FIRST PHONE GUEST APP via DisplayActivity, 120f PNG), T072 ok (8 JVM), T055 ok as negative verdict (D23); T069 blocked -> reviewer -Bsymbolic fix, todo max6 REVIEW caps debug; +T074 start desktop (gradle) T075 compat presets (pure PC); codex quota -> grok implementing
 2026-11-27 review31: T065,T070 ok (PNG red xterm; 6 JVM); T067 blocked=harness swiftshader fallback -> fixed, rerun PASS on Arc (gears PNG) -> done; T069 stub crashed (device_select recursion) -> split T069 skeleton + T071 FSR present; T055 accept pgrep fix + REVIEW, max5; +T072 onboarding (gradle) T073 GPU phosh (pcdisplay); D22
 2026-11-27 review30: T063 (gdpa 249), T066, T068 ok (accept PASS); T065 blocked 5x (lazy Xwayland, so argv scan finds nothing) -> reset carbon max4 with new approach; +T069 fg layer (pure PC), T070 settings (gradle); T067 mesa patch already in UPSTREAM.md; R29 closed
 2026-11-27 review29: T064 ok (accept PASS); T065 blocked=guest lacks python3 -> todo max5 REVIEW host-side scan; T063 a2 running; +T066 input (gradle) T067 kopper no-render (pcdisplay) T068 lodos-fg FSR1 (pure PC); D20 D21
