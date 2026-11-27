@@ -28,3 +28,10 @@
 - Harmless: dpkg "protected package" warnings come from the systemd removal.
 - Nested phoc creates its socket (`wayland-0`) in the host XDG_RUNTIME_DIR because of the bind. Use `WAYLAND_DISPLAY`/socket names that don't collide with the host.
 - Not done yet: running phosh against nested phoc, dbus/elogind startup on PC (same as phone T021/T025 path).
+
+## T037: phoc nested on lodos-wl headless
+- `scripts/pc-desktop.sh foot` starts lodos-wl headless (720x1600), then guest `phoc -C phoc.ini -E foot <demo>`, then SIGUSR1 PPM dump -> `scripts/ppm2png.py` -> docs/screens/T037-phoc-foot.png, then stops everything.
+- Runtime dir: `$XDG_RUNTIME_DIR/lodos-desk` (bound to guest /run/host-xdg). This keeps phoc's own `wayland-0` out of the host session dir.
+- phoc 0.46 does not handle wlroots output `request_state`, so the host toplevel configure size is ignored (it stays at the wayland-backend default of 1280x720). The nested output size is pinned with `[output:WL-1] mode=WxH` in phoc.ini. `[core] xwayland=false` removes the Xwayland CRITICAL.
+- lodos-wl protocols that phoc+pixman needs were already there (compositor, shm, xdg_wm_base, seat, output+xdg-output). Added: an initial toplevel configure with the output size, and an xdg-decoration stub (always server-side).
+- Harmless phoc log noise: `Basic output test failed for WL-1` (x3, phoc probing modes on a disabled output), no machine-id (idle-inhibit dbus), foot "no server-side cursors / toplevel icon".

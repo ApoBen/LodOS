@@ -46,7 +46,8 @@ use std::os::unix::net::UnixStream;
 use jni_sys::{jobject, jstring, JNIEnv};
 use smithay::{
     backend::input::{ButtonState, KeyState, TouchSlot},
-    delegate_compositor, delegate_output, delegate_seat, delegate_shm, delegate_xdg_shell,
+    delegate_compositor, delegate_output, delegate_seat, delegate_shm, delegate_xdg_decoration,
+    delegate_xdg_shell,
     input::{
         keyboard::{FilterResult, Keycode, XkbConfig},
         pointer::{ButtonEvent, MotionEvent as PointerMotionEvent},
@@ -61,7 +62,10 @@ use smithay::{
             ping::{make_ping, Ping, PingSource},
             EventLoop, Interest, Mode as CMode, PostAction,
         },
-        wayland_protocols::xdg::shell::server::xdg_toplevel,
+        wayland_protocols::xdg::{
+            decoration::zv1::server::zxdg_toplevel_decoration_v1::Mode as DecorationMode,
+            shell::server::xdg_toplevel,
+        },
         wayland_server::{
             backend::{ClientData, ClientId, DisconnectReason},
             protocol::{wl_buffer, wl_output, wl_seat, wl_shm, wl_surface::WlSurface},
@@ -76,6 +80,7 @@ use smithay::{
             SurfaceAttributes,
         },
         output::{OutputHandler, OutputManagerState},
+        shell::xdg::decoration::{XdgDecorationHandler, XdgDecorationState},
         shell::xdg::{
             Configure, PopupSurface, PositionerState, ShellClient, ToplevelSurface, XdgShellHandler,
             XdgShellState,
@@ -410,6 +415,7 @@ struct App {
     seat_state: SeatState<App>,
     seat: Seat<App>,
     _output_state: OutputManagerState,
+    _xdg_decoration_state: XdgDecorationState,
     output: Output,
     output_size: (i32, i32),
     presenter: Option<Arc<Mutex<WinPresenter>>>,
@@ -843,8 +849,12 @@ impl XdgShellHandler for App {
     fn new_toplevel(&mut self, surface: ToplevelSurface) {
         log_msg("lodos-wl: new xdg_toplevel");
         self.output.enter(surface.wl_surface());
+        // Phone-style: every toplevel fills the output. Nested compositors (wlroots wayland
+        // backend, e.g. phoc) size their output from this configure; 0x0 -> 1280x720 default.
+        let sz = self.output_size;
         surface.with_pending_state(|s| {
             s.states.set(xdg_toplevel::State::Activated);
+            s.size = Some(sz.into());
         });
         surface.send_configure();
         let wl_surf = surface.wl_surface().clone();
@@ -928,11 +938,27 @@ impl SeatHandler for App {
 
 impl OutputHandler for App {}
 
+impl XdgDecorationHandler for App {
+    fn new_decoration(&mut self, toplevel: ToplevelSurface) {
+        toplevel.with_pending_state(|s| s.decoration_mode = Some(DecorationMode::ServerSide));
+        if toplevel.is_initial_configure_sent() {
+            toplevel.send_configure();
+        }
+    }
+    fn request_mode(&mut self, toplevel: ToplevelSurface, _mode: DecorationMode) {
+        self.new_decoration(toplevel);
+    }
+    fn unset_mode(&mut self, toplevel: ToplevelSurface) {
+        self.new_decoration(toplevel);
+    }
+}
+
 delegate_compositor!(App);
 delegate_shm!(App);
 delegate_xdg_shell!(App);
 delegate_seat!(App);
 delegate_output!(App);
+delegate_xdg_decoration!(App);
 
 fn add_client(dh: &mut DisplayHandle, stream: UnixStream) {
     if let Err(e) = dh.insert_client(stream, Arc::new(ClientState::default())) {
@@ -989,6 +1015,8 @@ fn run_server_inner(args: ServerRunArgs) -> Result<(), Box<dyn std::error::Error
             vec![wl_shm::Format::Abgr8888, wl_shm::Format::Xbgr8888],
         );
         let xdg_shell_state = XdgShellState::new::<App>(&dh);
+        // xdg-decoration stub: always server-side (we draw none) so nested wlroots/GTK skip CSD.
+        let xdg_decoration_state = XdgDecorationState::new::<App>(&dh);
         let mut seat_state = SeatState::new();
         let mut seat: Seat<App> = seat_state.new_wl_seat(&dh, "seat0");
         seat.add_pointer();
@@ -1118,6 +1146,7 @@ fn run_server_inner(args: ServerRunArgs) -> Result<(), Box<dyn std::error::Error
             seat_state,
             seat,
             _output_state: output_state,
+            _xdg_decoration_state: xdg_decoration_state,
             output,
             output_size,
             presenter,
