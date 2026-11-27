@@ -159,7 +159,7 @@ $prev"
 
 log "runner start (lanes=$LANES)"
 rm -rf "$RUN_D"; mkdir -p "$RUN_D"
-declare -A PIDS
+declare -A PIDS=()
 lane(){ # run one task in background; resource claim file removed on exit
   local f=$1 id; id=$(basename "$f" .md)
   task_res "$f" | sort -u > "$RUN_D/$id"
