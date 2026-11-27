@@ -9,7 +9,7 @@ Hi, thanks for this project. We use the wrapper in LodOS (rootless Linux on Andr
 1. Removed `cutils` from the android_stub `lib_names` and added a small static `cutils_local.c` with the few symbols Mesa uses: `property_get` (on top of `__system_property_get`) and no-op `atrace_*` stubs, with tracing reported as disabled.
 2. Optional: added a linker version script so the .so exports only `vk_icd*` symbols, plus `--exclude-libs` for the static SPIRV-Tools/libc++ archives. This keeps the wrapper's internal symbols from clashing with other libraries in the same process.
 
-After this, `readelf -d` shows only NDK libraries as NEEDED, and the ICD loads from inside our app. vkcube runs on the Mali device.
+After this, `readelf -d` lists only NDK libraries as NEEDED. We are still testing it inside our app and will add results here.
 
 Patch: https://github.com/ApoBen/LodOS/blob/master/patches/bionic-vulkan-wrapper/0002-lodos-no-cutils-icd-exports.patch
 
