@@ -37,6 +37,12 @@
             android:configChanges="orientation|screenSize|keyboardHidden|screenLayout|smallestScreenSize"
             android:exported="true"
             android:theme="@android:style/Theme.Black.NoTitleBar.Fullscreen" />
+        <!-- T040: read-only FileProvider for bug report zips -->
+        <provider
+            android:name=".bugreport.BugReportFileProvider"
+            android:authorities="${applicationId}.bugreport"
+            android:exported="false"
+            android:grantUriPermissions="true" />
     </application>
 
 </manifest>

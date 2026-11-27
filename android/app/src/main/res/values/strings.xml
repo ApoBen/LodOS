@@ -22,4 +22,5 @@
     <string name="setup_btn_retry">Retry</string>
     <string name="setup_btn_start">Start LodOS</string>
     <string name="setup_btn_native_info">Native Info</string>
+    <string name="setup_btn_report">Report a problem</string>
 </resources>

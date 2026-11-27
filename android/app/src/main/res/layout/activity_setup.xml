@@ -91,6 +91,14 @@
         android:orientation="horizontal">
 
         <Button
+            android:id="@+id/setup_btn_report"
+            style="?android:attr/borderlessButtonStyle"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginEnd="12dp"
+            android:text="@string/setup_btn_report" />
+
+        <Button
             android:id="@+id/setup_btn_back"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"

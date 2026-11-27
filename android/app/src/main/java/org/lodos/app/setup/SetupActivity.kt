@@ -11,6 +11,7 @@ import android.widget.TextView
 import org.lodos.app.DisplayActivity
 import org.lodos.app.MainActivity
 import org.lodos.app.R
+import org.lodos.app.bugreport.BugReportCollector
 import java.io.File
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
@@ -84,6 +85,9 @@ class SetupActivity : Activity() {
         }
         primaryButton.setOnClickListener {
             onPrimaryAction(machine.state)
+        }
+        findViewById<Button>(R.id.setup_btn_report).setOnClickListener {
+            BugReportCollector.reportProblem(this, machine.state.toString())
         }
         nativeInfoButton.setOnClickListener {
             startActivity(Intent(this, MainActivity::class.java))
