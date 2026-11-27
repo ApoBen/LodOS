@@ -170,18 +170,49 @@ class Reg:
         self.structs = {}
         self.structextends = {}
         self.core_types = set()
+        self.dev_exts = {}
+        raw_cmd_alias = {}
+        for c in root.iter('command'):
+            if not api_ok(c):
+                continue
+            if c.get('alias') and c.get('name'):
+                raw_cmd_alias[c.get('name')] = c.get('alias')
+        self.raw_cmd_alias = raw_cmd_alias
+
+        def res_cmd_local(nm):
+            while nm in raw_cmd_alias:
+                nm = raw_cmd_alias[nm]
+            return nm
+
         for f in root.findall('feature'):
             if api_ok(f):
                 for req in f.findall('require'):
                     for tp in req.findall('type'):
                         self.core_types.add(tp.get('name'))
+        self.valid_cmd_aliases = {}
         for ext in root.find('extensions').findall('extension'):
             supp = (ext.get('supported') or '').split(',')
             if 'vulkan' in supp and not ext.get('platform') and not ext.get('provisional'):
+                en = ext.get('name')
+                ereqs = []
                 for req in ext.findall('require'):
                     if api_ok(req):
+                        rcmds = []
+                        rtypes = []
                         for tp in req.findall('type'):
                             self.core_types.add(tp.get('name'))
+                            rtypes.append(tp.get('name'))
+                        for cm in req.findall('command'):
+                            cn = cm.get('name')
+                            rc = res_cmd_local(cn)
+                            rcmds.append(rc)
+                            if cn != rc:
+                                self.valid_cmd_aliases.setdefault(rc, [])
+                                if cn not in self.valid_cmd_aliases[rc]:
+                                    self.valid_cmd_aliases[rc].append(cn)
+                        ereqs.append((req.get('depends'), rcmds, rtypes))
+                if ext.get('type') == 'device':
+                    self.dev_exts[en] = ereqs
         for t in root.find('types').findall('type'):
             if not api_ok(t):
                 continue
@@ -275,7 +306,7 @@ class Gen:
             if r.res(d.base) == 'char' and ln and ln[0] == 'null-terminated':
                 return ('string', None)
             if r.res(d.base) == 'void':
-                if d.const_outer and ln and ok_len_expr(ln[0]) and ln[0] != 'null-terminated':
+                if (d.const_outer or is_param) and ln and ok_len_expr(ln[0]) and ln[0] != 'null-terminated':
                     return ('bytes', None)
                 raise Unsupported('void* %s' % d.name)
             k = r.kind(d.base)
@@ -405,7 +436,7 @@ class Gen:
                     '  if (p_) { uint32_t c_; VKB_GET(b, n, &c_, 4);',
                     '    uint8_t *e_ = (uint8_t *)vkb_arena_alloc(a, c_);',
                     '    if (c_) VKB_GET(b, n, e_, c_);',
-                    '    %s = (const void *)e_; } else %s = NULL; }' % (lv, lv)]
+                    '    %s = (void *)e_; } else %s = NULL; }' % (lv, lv)]
         et = self.elem_ctype(d)
         if k == 'single':
             return ['{ uint8_t p_; VKB_GET(b, n, &p_, 1);',
@@ -455,7 +486,7 @@ class Gen:
             nfill = N_FILL if len_refs(d.len[0]) else eval_len_expr(d.len[0], lambda nm: nm)
             return ['{ uint8_t *e_ = (uint8_t *)vkb_arena_alloc(a, (size_t)%s);' % nfill,
                     '  vkb_fill_bytes(e_, (size_t)%s, seed);' % nfill,
-                    '  %s = (const void *)e_; }' % lv], setcnt(d.len[0])
+                    '  %s = (void *)e_; }' % lv], setcnt(d.len[0])
         et = self.elem_ctype(d)
         if k == 'single':
             return ['{ %s *e_ = (%s *)vkb_arena_alloc(a, sizeof(%s));' % (et, et, et)] + \

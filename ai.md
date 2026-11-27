@@ -95,6 +95,7 @@ P5 generalize + github + CI
 (live status: task files frontmatter)
 
 ## OPEN (need user)
+- 2026-11-27 USER: before GitHub release add (a) in-app bug-report/log collector (one button: logs+device info -> shareable file/issue template), (b) lite mode for 400-600k AnTuTu / 4-6GB devices (no animations, zram, smaller rootfs). Later Claude manages community (issues, contributors).
 - 2026-11-27 USER DIRECTIVE: priority = first visible desktop (phosh). phone away ~09:30-evening -> plan PC-only desktop path now (lodos-wl headless/xdg-shell/seat on PC, phoc nested via wayland backend WLR_RENDERER=pixman, then phosh, screenshot proof); phone tasks after replug. GPU accel (zink over bridge) later.
 (none)
 

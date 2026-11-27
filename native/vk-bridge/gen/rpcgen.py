@@ -70,8 +70,8 @@ def emit(reg, Gen, Unsupported, cmds, out, hdr):
     def dirn(p, ps):
         """'in' | 'out' | 'inout'"""
         k, ek = g.classify(p, True)
-        if p.depth == 1 and not p.const_outer and k in ('single', 'array'):
-            if k == 'single' and ek == 'scalar' and p.name in lenlist(ps):
+        if p.depth == 1 and not p.const_outer and k in ('single', 'array', 'bytes'):
+            if k == 'single' and ek in ('scalar', 'size') and p.name in lenlist(ps):
                 return 'inout'
             return 'out'
         return 'in'
@@ -215,8 +215,9 @@ def emit(reg, Gen, Unsupported, cmds, out, hdr):
     for c in cmds:
         ps = R.cmds[c]
         try:
-            if R.ret[c] not in ('VkResult', 'void'):
-                raise Unsupported('return type %s' % R.ret[c])
+            rt = R.ret[c]
+            if rt not in ('VkResult', 'void') and R.kind(rt) != 'scalar':
+                raise Unsupported('return type %s' % rt)
             for p in ps:
                 k, ek = g.classify(p, True)
                 dr = dirn(p, ps)
@@ -229,7 +230,7 @@ def emit(reg, Gen, Unsupported, cmds, out, hdr):
                                     chained_roots.append(bs)
                             else:
                                 raise Unsupported('out struct %s not flat/chained' % bs)
-                    if k == 'array':
+                    if k in ('array', 'bytes'):
                         ln0 = p.len[0]
                         if '->' in ln0:
                             pnm, mnm = ln0.split('->', 1)
@@ -289,7 +290,8 @@ def emit(reg, Gen, Unsupported, cmds, out, hdr):
     # ---- vkb_rpc.h ------------------------------------------------------
     def cproto(c, prefix, extra):
         ps = [extra] + ['%s %s' % (p.ctype, p.name) for p in R.cmds[c]]
-        return 'VkResult %s%s(%s)' % (prefix, c, ', '.join(ps))
+        rt = R.ret[c] if R.ret[c] != 'void' else 'VkResult'
+        return '%s %s%s(%s)' % (rt, prefix, c, ', '.join(ps))
 
     h = [hdr, '#ifndef VKB_RPC_H', '#define VKB_RPC_H', '#include "vkb_wire.h"', '#include "vkb_cmds.h"', '']
     for c in ok:
@@ -364,19 +366,32 @@ def emit(reg, Gen, Unsupported, cmds, out, hdr):
                   '            if (s->pStages[gi_].stage & (VK_SHADER_STAGE_TESSELLATION_CONTROL_BIT | VK_SHADER_STAGE_TESSELLATION_EVALUATION_BIT))',
                   '                gp_tess_ = 1;',
                   '    }',
-                  '    int gp_dyn_vp_ = 0, gp_dyn_sc_ = 0, gp_dyn_rd_ = 0;',
+                  '    int gp_dyn_vp_ = 0, gp_dyn_sc_ = 0, gp_dyn_rd_ = 0, gp_dyn_vi_ = 0;',
                   '    if (s->pDynamicState && s->pDynamicState->pDynamicStates) {',
                   '        for (uint32_t gi_ = 0; gi_ < s->pDynamicState->dynamicStateCount; gi_++) {',
                   '            VkDynamicState ds_ = s->pDynamicState->pDynamicStates[gi_];',
                   '            if (ds_ == VK_DYNAMIC_STATE_VIEWPORT || ds_ == VK_DYNAMIC_STATE_VIEWPORT_WITH_COUNT) gp_dyn_vp_ = 1;',
                   '            else if (ds_ == VK_DYNAMIC_STATE_SCISSOR || ds_ == VK_DYNAMIC_STATE_SCISSOR_WITH_COUNT) gp_dyn_sc_ = 1;',
                   '            else if (ds_ == VK_DYNAMIC_STATE_RASTERIZER_DISCARD_ENABLE) gp_dyn_rd_ = 1;',
+                  '            else if (ds_ == VK_DYNAMIC_STATE_VERTEX_INPUT_EXT) gp_dyn_vi_ = 1;',
                   '        }',
                   '    }',
                   '    int gp_discard_ = !(s->flags & VK_PIPELINE_CREATE_LIBRARY_BIT_KHR) &&',
                   '                      s->pRasterizationState && s->pRasterizationState->rasterizerDiscardEnable && !gp_dyn_rd_;']
         for d in mem:
-            if s == 'VkDescriptorSetLayoutBinding' and d.name == 'pImmutableSamplers':
+            if s in ('VkBufferCreateInfo', 'VkImageCreateInfo') and d.name == 'queueFamilyIndexCount':
+                m += ['    { uint32_t qfc_ = (s->sharingMode == VK_SHARING_MODE_CONCURRENT) ? s->queueFamilyIndexCount : 0;',
+                      '      vkr_put(w, &qfc_, sizeof(uint32_t)); }']
+            elif s in ('VkBufferCreateInfo', 'VkImageCreateInfo') and d.name == 'pQueueFamilyIndices':
+                m += ['    { const uint32_t *qfi_ = (s->sharingMode == VK_SHARING_MODE_CONCURRENT) ? s->pQueueFamilyIndices : NULL;'] + \
+                     ['      ' + x for x in enc_in(d, 'qfi_', lambda ln0: '((s->sharingMode == VK_SHARING_MODE_CONCURRENT) ? s->queueFamilyIndexCount : 0)', False)] + ['    }']
+            elif s == 'VkFramebufferCreateInfo' and d.name == 'pAttachments':
+                m += ['    { const VkImageView *fa_ = (s->flags & VK_FRAMEBUFFER_CREATE_IMAGELESS_BIT) ? NULL : s->pAttachments;'] + \
+                     ['      ' + x for x in enc_in(d, 'fa_', s_cnt, False)] + ['    }']
+            elif s == 'VkGraphicsPipelineCreateInfo' and d.name == 'pVertexInputState':
+                m += ['    { const VkPipelineVertexInputStateCreateInfo *vi_ = gp_dyn_vi_ ? NULL : s->pVertexInputState;'] + \
+                     ['      ' + x for x in enc_in(d, 'vi_', s_cnt, False)] + ['    }']
+            elif s == 'VkDescriptorSetLayoutBinding' and d.name == 'pImmutableSamplers':
                 m += ['    { const VkSampler *is_ = vkr_ds_has_imm_sampler(s->descriptorType) ? s->pImmutableSamplers : NULL;'] + \
                      ['      ' + x for x in enc_in(d, 'is_', s_cnt, False)] + ['    }']
             elif s == 'VkWriteDescriptorSet' and d.name == 'pImageInfo':
@@ -604,11 +619,14 @@ def emit(reg, Gen, Unsupported, cmds, out, hdr):
          'void vkr_h_drop(void *hctx, VkObjectType t, uint64_t h) { (void)hctx; (void)t; (void)h; }', '']
     for c in ok:
         ps = R.cmds[c]
+        rt = R.ret[c]
+        ret_scalar = rt not in ('VkResult', 'void')
+        err_r = lambda code, rt=rt, rs=ret_scalar: ('(%s)0' % rt) if rs else code
         cnt = lambda nm, ps=ps: cnt_expr(ps, nm)
         m += [cproto(c, 'vkbc_', 'vkbc *c') + ' {']
         outs = [p for p in ps if dirn(p, ps) != 'in']
         for p in outs:
-            if g.classify(p, True)[0] == 'array':
+            if g.classify(p, True)[0] in ('array', 'bytes'):
                 m.append('    uint32_t cap_%s = (uint32_t)(%s);' % (p.name, cnt(p.len[0])))
         m += ['    size_t bcap; uint8_t *buf = vkbc__buf(c, &bcap);',
               '    vkr_wr w_ = { buf, bcap, 0, 0, NULL }, *w = &w_;',
@@ -635,20 +653,20 @@ def emit(reg, Gen, Unsupported, cmds, out, hdr):
                     m += ['        for (uint32_t %s = 0; %s < cap_%s; %s++)' % (i, i, p.name, i),
                           '            vkr_pnext_req(w, %s[%s].pNext);' % (p.name, i)]
                 m.append('    }')
-        m += ['    if (w->err) return VK_ERROR_OUT_OF_HOST_MEMORY;',
+        m += ['    if (w->err) return %s;' % err_r('VK_ERROR_OUT_OF_HOST_MEMORY'),
               '    const uint8_t *rep; size_t replen;',
-              '    if (vkbc__call(c, w->off, &rep, &replen) < 0) return VK_ERROR_DEVICE_LOST;',
+              '    if (vkbc__call(c, w->off, &rep, &replen) < 0) return %s;' % err_r('VK_ERROR_DEVICE_LOST'),
               '    vkr_rd r_ = { rep, replen, 0, 0, NULL, NULL }, *r = &r_;',
-              '    if (vkr_get_u32(r) != VKB_CMD_%s) return VK_ERROR_UNKNOWN;' % c,
+              '    if (vkr_get_u32(r) != VKB_CMD_%s) return %s;' % (c, err_r('VK_ERROR_UNKNOWN')),
               '    VkResult res; vkr_get(r, &res, sizeof res);',
-              '    if (r->err) return VK_ERROR_UNKNOWN;',
-              '    if (res < 0) return res;']
+              '    if (r->err) return %s;' % err_r('VK_ERROR_UNKNOWN'),
+              '    if (res < 0) return %s;' % err_r('res')]
         for p in outs:
             k, ek = g.classify(p, True)
             base = R.res(p.base)
             ch = is_chained_param(p)
             m += ['    { uint8_t p_ = vkr_get_u8(r);',
-                  '      if (p_ != (%s != NULL)) return VK_ERROR_UNKNOWN;' % p.name]
+                  '      if (p_ != (%s != NULL)) return %s;' % (p.name, err_r('VK_ERROR_UNKNOWN'))]
             if k == 'single':
                 if ch:
                     m += ['      if (p_) {',
@@ -658,10 +676,15 @@ def emit(reg, Gen, Unsupported, cmds, out, hdr):
                           '      } }']
                 else:
                     m += ['      if (p_) {'] + ['          ' + x for x in dec_val(ek, base, '(*%s)' % p.name)] + ['      } }']
+            elif k == 'bytes':
+                m += ['      if (p_) { uint32_t n_ = vkr_get_u32(r);',
+                      '          if (n_ > cap_%s) return %s;' % (p.name, err_r('VK_ERROR_UNKNOWN')),
+                      '          if (n_) vkr_get(r, %s, n_);' % p.name,
+                      '      } }']
             else:
                 i = 'i%d' % g.u()
                 m += ['      if (p_) { uint32_t n_ = vkr_get_u32(r);',
-                      '          if (n_ > cap_%s) return VK_ERROR_UNKNOWN;' % p.name,
+                      '          if (n_ > cap_%s) return %s;' % (p.name, err_r('VK_ERROR_UNKNOWN')),
                       '          for (uint32_t %s = 0; %s < n_ && !r->err; %s++) {' % (i, i, i)]
                 if ch:
                     m += ['              %s[%s].sType = %s;' % (p.name, i, stype_enum(base)),
@@ -670,12 +693,17 @@ def emit(reg, Gen, Unsupported, cmds, out, hdr):
                 else:
                     m += ['              ' + x for x in dec_val(ek, base, '%s[%s]' % (p.name, i))]
                 m += ['          } } }']
-        m.append('    if (r->err) return VK_ERROR_UNKNOWN;')
-        if c in ('vkUnmapMemory', 'vkFreeMemory'):
-            m.append('    vkbc__drop_map(c, (uint64_t)(uintptr_t)device, (uint64_t)(uintptr_t)memory);')
-        elif c == 'vkDestroyDevice':
-            m.append('    vkbc__drop_map(c, (uint64_t)(uintptr_t)device, 0);')
-        m += ['    return res;', '}', '']
+        if ret_scalar:
+            m += ['    %s ret_ = 0; vkr_get(r, &ret_, sizeof ret_);' % rt,
+                  '    if (r->err) return (%s)0;' % rt,
+                  '    return ret_;', '}', '']
+        else:
+            m.append('    if (r->err) return VK_ERROR_UNKNOWN;')
+            if c in ('vkUnmapMemory', 'vkFreeMemory'):
+                m.append('    vkbc__drop_map(c, (uint64_t)(uintptr_t)device, (uint64_t)(uintptr_t)memory);')
+            elif c == 'vkDestroyDevice':
+                m.append('    vkbc__drop_map(c, (uint64_t)(uintptr_t)device, 0);')
+            m += ['    return res;', '}', '']
     open(os.path.join(out, 'vkb_rpc_client.c'), 'w').write('\n'.join(m))
 
     # ---- vkb_rpc_server.c ----------------------------------------------
@@ -718,6 +746,16 @@ def emit(reg, Gen, Unsupported, cmds, out, hdr):
                           '        if (%s) { %s->sType = %s; %s->pNext = pn_; } }' % (p.name, p.name, stype_enum(base), p.name)]
                 else:
                     m.append('    if (vkr_get_u8(r)) %s = (%s *)vkr_alloc(r, sizeof(%s));' % (p.name, et, et))
+            elif k == 'bytes':
+                m += ['    if (vkr_get_u8(r)) { n_%s = vkr_get_u32(r);' % p.name,
+                      '        if (n_%s > VKR_MAX_BYTES) vkr_fail(&r->err, VKR_E_BOUNDS);' % p.name,
+                      '        %s = vkr_alloc_arr(r, n_%s, 1, 0); }' % (p.name, p.name)]
+                ln = p.len[0]
+                if [q for q in ps if q.name == ln and q.depth]:
+                    m.append('    if (%s && (!%s || *%s > n_%s)) vkr_fail(&r->err, VKR_E_COUNT);' % (p.name, ln, ln, p.name))
+                else:
+                    m.append('    if (((uint32_t)(%s) > 0 && !%s) || (%s && n_%s != (uint32_t)(%s))) vkr_fail(&r->err, VKR_E_COUNT);' %
+                             (ln, p.name, p.name, p.name, ln))
             else:
                 m += ['    if (vkr_get_u8(r)) { n_%s = vkr_get_u32(r);' % p.name,
                       '        if (n_%s > VKR_MAX_ARR) vkr_fail(&r->err, VKR_E_BOUNDS);' % p.name,
@@ -744,10 +782,14 @@ def emit(reg, Gen, Unsupported, cmds, out, hdr):
         m += ['    vkr_put_u32(w, VKB_CMD_%s);' % c,
               '    if (r->err) { VkResult e_ = vkr_err_res(r->err); vkr_put(w, &e_, sizeof e_); return; }']
         args = ', '.join(p.name for p in ps)
-        if R.ret[c] == 'VkResult':
+        rt = R.ret[c]
+        ret_scalar = rt not in ('VkResult', 'void')
+        if rt == 'VkResult':
             m.append('    VkResult res = f->%s(%s);' % (c, args))
-        else:
+        elif rt == 'void':
             m += ['    f->%s(%s);' % (c, args), '    VkResult res = VK_SUCCESS;']
+        else:
+            m += ['    %s ret_ = f->%s(%s);' % (rt, c, args), '    VkResult res = VK_SUCCESS;']
         if c.startswith('vkDestroy'):
             obj = 'Vk' + c[len('vkDestroy'):]
             for p in ps:
@@ -775,6 +817,10 @@ def emit(reg, Gen, Unsupported, cmds, out, hdr):
                     m += ['    if (%s) { vkrw_body_%s(w, %s); vkr_pnext_srv_enc(w, &ch_%s); }' % (p.name, base, p.name, p.name)]
                 else:
                     m += ['    if (%s) {' % p.name] + ['        ' + x for x in enc_val(ek, base, '(*%s)' % p.name)] + ['    }']
+            elif k == 'bytes':
+                m += ['    if (%s) { uint32_t c_ = (uint32_t)(%s); if (c_ > n_%s) c_ = n_%s; vkr_put_u32(w, c_);' %
+                      (p.name, cnt_expr(ps, p.len[0]), p.name, p.name),
+                      '        if (c_) vkr_put(w, %s, c_); }' % p.name]
             else:
                 i = 'i%d' % g.u()
                 m += ['    if (%s) { uint32_t c_ = (uint32_t)(%s); if (c_ > n_%s) c_ = n_%s; vkr_put_u32(w, c_);' %
@@ -786,6 +832,8 @@ def emit(reg, Gen, Unsupported, cmds, out, hdr):
                 else:
                     m += ['            ' + x for x in enc_val(ek, base, '%s[%s]' % (p.name, i))]
                 m += ['        } }']
+        if ret_scalar:
+            m.append('    vkr_put(w, &ret_, sizeof ret_);')
         m += ['}', '']
     m += ['size_t vkr_srv_dispatch(const vkr_srv_fns *f, void *hctx, vkr_arena *a,',
           '                        const uint8_t *req, size_t len, uint8_t *rep, size_t cap) {',
@@ -799,7 +847,224 @@ def emit(reg, Gen, Unsupported, cmds, out, hdr):
     m += ['    default: return 0;', '    }', '    return w.err ? 0 : w.off;', '}', '']
     open(os.path.join(out, 'vkb_rpc_server.c'), 'w').write('\n'.join(m))
 
+    emit_icd_inc(R, ok, cmds, in_roots, set(in_pnext_exts), out, hdr)
+
     print('rpcgen: %d cmds bridged, %d not, %d structs (%d pNext in-exts, %d pNext out-exts)' %
           (len(ok), len(bad), len(structs), len(in_pnext_exts), len(pnext_exts)))
     for c, why in bad.items():
         print('rpcgen: skip %s: %s' % (c, why))
+
+
+CUSTOM_ICD_CMDS = {
+    'vkEnumerateInstanceVersion',
+    'vkEnumerateInstanceLayerProperties',
+    'vkEnumerateInstanceExtensionProperties',
+    'vkCreateInstance',
+    'vkDestroyInstance',
+    'vkEnumeratePhysicalDevices',
+    'vkEnumeratePhysicalDeviceGroups',
+    'vkGetPhysicalDeviceProperties',
+    'vkGetPhysicalDeviceProperties2',
+    'vkEnumerateDeviceLayerProperties',
+    'vkEnumerateDeviceExtensionProperties',
+    'vkCreateDevice',
+    'vkDestroyDevice',
+    'vkGetDeviceQueue',
+    'vkGetDeviceQueue2',
+    'vkQueueSubmit',
+    'vkQueueSubmit2',
+    'vkAllocateMemory',
+    'vkMapMemory',
+    'vkGetMemoryFdKHR',
+    'vkGetMemoryFdPropertiesKHR',
+    'vkDestroyCommandPool',
+    'vkAllocateCommandBuffers',
+    'vkFreeCommandBuffers',
+    'vkBeginCommandBuffer',
+    'vkCmdExecuteCommands',
+    'vkCreateDescriptorUpdateTemplate',
+    'vkDestroyDescriptorUpdateTemplate',
+    'vkUpdateDescriptorSetWithTemplate',
+    'vkCmdPushDescriptorSetWithTemplate',
+}
+
+DENY_DEV_EXTS = {
+    # Unbridged external sync FDs / host pointers / DRM modifiers
+    'VK_KHR_external_semaphore_fd',
+    'VK_KHR_external_fence_fd',
+    'VK_EXT_external_memory_host',
+    'VK_EXT_external_memory_acquire_unmodified',
+    'VK_EXT_queue_family_foreign',
+    'VK_EXT_image_drm_format_modifier',
+    # WSI / swapchain / display (comes in S2)
+    'VK_KHR_swapchain',
+    'VK_KHR_swapchain_mutable_format',
+    'VK_KHR_swapchain_maintenance1',
+    'VK_EXT_swapchain_maintenance1',
+    'VK_KHR_incremental_present',
+    'VK_KHR_display_swapchain',
+    'VK_KHR_shared_presentable_image',
+    'VK_KHR_present_id',
+    'VK_KHR_present_id2',
+    'VK_KHR_present_wait',
+    'VK_KHR_present_wait2',
+    'VK_EXT_present_timing',
+    'VK_EXT_display_control',
+    'VK_EXT_hdr_metadata',
+    'VK_GOOGLE_display_timing',
+    # Memory map v2 / placed map (shadow memfd hooks vkMapMemory/vkUnmapMemory)
+    'VK_KHR_map_memory2',
+    'VK_EXT_map_memory_placed',
+    # Callbacks / pipeline libraries / descriptor buffer
+    'VK_EXT_device_memory_report',
+    'VK_EXT_device_address_binding_report',
+    'VK_EXT_graphics_pipeline_library',
+    'VK_KHR_pipeline_library',
+    'VK_EXT_descriptor_buffer',
+    'VK_EXT_descriptor_heap',
+}
+
+
+def emit_icd_inc(R, ok, cmds, in_roots, in_pnext_set, out, hdr):
+    import re
+    ok_set = set(ok)
+    icd_avail = set(ok) | {'vkEnumerateInstanceLayerProperties', 'vkEnumerateDeviceLayerProperties'}
+    if 'vkMapMemory' in cmds:
+        icd_avail.add('vkMapMemory')
+    if 'vkUpdateDescriptorSets' in ok_set:
+        icd_avail |= {'vkCreateDescriptorUpdateTemplate', 'vkDestroyDescriptorUpdateTemplate',
+                      'vkUpdateDescriptorSetWithTemplate'}
+    if 'vkCmdPushDescriptorSet' in ok_set:
+        icd_avail.add('vkCmdPushDescriptorSetWithTemplate')
+
+    base_active = {
+        'VK_VERSION_1_0', 'VK_VERSION_1_1', 'VK_VERSION_1_2', 'VK_VERSION_1_3',
+        'VK_BASE_VERSION_1_0', 'VK_COMPUTE_VERSION_1_0', 'VK_GRAPHICS_VERSION_1_0',
+        'VK_BASE_VERSION_1_1', 'VK_COMPUTE_VERSION_1_1', 'VK_GRAPHICS_VERSION_1_1',
+        'VK_BASE_VERSION_1_2', 'VK_COMPUTE_VERSION_1_2', 'VK_GRAPHICS_VERSION_1_2',
+        'VK_BASE_VERSION_1_3', 'VK_COMPUTE_VERSION_1_3', 'VK_GRAPHICS_VERSION_1_3',
+        'VK_KHR_get_physical_device_properties2',
+        'VK_KHR_external_memory_capabilities',
+        'VK_KHR_external_semaphore_capabilities',
+        'VK_KHR_external_fence_capabilities',
+    }
+
+    def dep_ok(expr, active):
+        if not expr:
+            return True
+        def tok_val(mo):
+            t = mo.group(0)
+            if '::' in t:
+                return 'True'
+            return 'True' if t in active else 'False'
+        s = re.sub(r'[A-Za-z_][A-Za-z0-9_]*(?:::[A-Za-z0-9_]+)*', tok_val, expr)
+        s = s.replace('(', ' ( ').replace(')', ' ) ').replace('+', ' and ').replace(',', ' or ')
+        return bool(eval(s, {'__builtins__': {}}))
+
+    cand = {en for en in R.dev_exts if en not in DENY_DEV_EXTS}
+    changed = True
+    while changed:
+        changed = False
+        active = base_active | cand
+        drop = set()
+        for en in cand:
+            for dep, rcmds, rtypes in R.dev_exts[en]:
+                if not dep_ok(dep, active):
+                    continue
+                if any(c not in icd_avail for c in rcmds):
+                    drop.add(en)
+                    break
+                bad_t = False
+                for tp in rtypes:
+                    exts = R.structextends.get(tp)
+                    if exts and R.cat.get(tp) == 'struct' and (in_roots & set(exts)):
+                        if tp not in in_pnext_set and tp != 'VkPipelineCreationFeedbackCreateInfo':
+                            bad_t = True
+                            break
+                if bad_t:
+                    drop.add(en)
+                    break
+        if drop:
+            cand -= drop
+            changed = True
+
+    ic = [hdr, '/* Auto-generated ICD thunks, proc tables, and device extension allowlist */', '']
+    for c in ok:
+        if c in CUSTOM_ICD_CMDS:
+            continue
+        ps = R.cmds[c]
+        if not ps:
+            continue
+        b0 = R.res(ps[0].base)
+        if b0 not in ('VkPhysicalDevice', 'VkDevice', 'VkQueue', 'VkCommandBuffer'):
+            continue
+        rt = R.ret[c]
+        pdecl = ', '.join('%s %s' % (p.ctype, p.name) for p in ps)
+        ic.append('static VKAPI_ATTR %s VKAPI_CALL icd_%s(%s) {' % (rt, c, pdecl))
+        if b0 == 'VkQueue':
+            ic.append('    if (!%s) return%s;' % (ps[0].name, ' VK_ERROR_DEVICE_LOST' if rt == 'VkResult' else ''))
+            a0 = 'QUEUE_RAW(%s)' % ps[0].name
+        elif b0 == 'VkPhysicalDevice':
+            a0 = 'PD_RAW(%s)' % ps[0].name
+        elif b0 == 'VkDevice':
+            if (c.startswith('vkDestroy') or c in ('vkFreeMemory', 'vkUnmapMemory')) and len(ps) >= 2 and R.kind(ps[1].base) == 'handle' and ps[1].depth == 0:
+                ic.append('    if (!%s) return;' % ps[1].name)
+            elif c == 'vkFreeDescriptorSets':
+                ic.append('    if (!descriptorSetCount) return VK_SUCCESS;')
+            a0 = 'DEV_RAW(%s)' % ps[0].name
+        else:
+            a0 = 'CMDBUF_RAW(%s)' % ps[0].name
+        call_args = ', '.join(['c_', a0] + [p.name for p in ps[1:]])
+        if rt == 'VkResult':
+            ic.append('    ICD_CALL_RES(vkbc_%s(%s));' % (c, call_args))
+        elif rt == 'void':
+            ic.append('    ICD_CALL_VOID(vkbc_%s(%s));' % (c, call_args))
+        else:
+            ic += ['    pthread_mutex_lock(&g_mu);',
+                   '    vkbc *c_ = icd_conn_locked();',
+                   '    %s r_ = c_ ? vkbc_%s(%s) : (%s)0;' % (rt, c, call_args, rt),
+                   '    pthread_mutex_unlock(&g_mu);',
+                   '    return r_;']
+        ic += ['}', '']
+
+    def add_ent_with_aliases(lst, c):
+        lst.append('    ENT("%s", icd_%s),' % (c, c))
+        for al in R.valid_cmd_aliases.get(c, []):
+            lst.append('    ENT("%s", icd_%s),' % (al, c))
+
+    ic.append('static const proc_ent k_inst_procs[] = {')
+    for c in ('vkDestroyInstance', 'vkEnumeratePhysicalDevices', 'vkEnumeratePhysicalDeviceGroups', 'vkCreateDevice'):
+        if c in icd_avail:
+            add_ent_with_aliases(ic, c)
+    ic.append('    ENT("vkGetDeviceProcAddr", icd_vkGetDeviceProcAddr),')
+    ic += ['};', '']
+
+    ic.append('static const proc_ent k_pdev_procs[] = {')
+    for c in cmds:
+        if c in icd_avail and c != 'vkCreateDevice' and R.cmds.get(c) and R.res(R.cmds[c][0].base) == 'VkPhysicalDevice':
+            add_ent_with_aliases(ic, c)
+    if 'vkEnumerateDeviceLayerProperties' in icd_avail and 'vkEnumerateDeviceLayerProperties' not in cmds:
+        add_ent_with_aliases(ic, 'vkEnumerateDeviceLayerProperties')
+    ic += ['};', '']
+
+    ic.append('static const proc_ent k_dev_procs[] = {')
+    ic.append('    ENT("vkGetDeviceProcAddr", icd_vkGetDeviceProcAddr),')
+    ordered_dev = list(cmds) + [x for x in ('vkCreateDescriptorUpdateTemplate', 'vkDestroyDescriptorUpdateTemplate',
+                                            'vkUpdateDescriptorSetWithTemplate', 'vkCmdPushDescriptorSetWithTemplate')
+                                if x not in cmds]
+    for c in ordered_dev:
+        if c in icd_avail and R.cmds.get(c) and R.res(R.cmds[c][0].base) in ('VkDevice', 'VkQueue', 'VkCommandBuffer'):
+            add_ent_with_aliases(ic, c)
+    ic += ['};', '']
+
+    ic.append('static int icd_dev_ext_supported(const char *name) {')
+    ic.append('    static const char *const k_dev_exts[] = {')
+    for en in sorted(cand):
+        ic.append('        "%s",' % en)
+    ic += ['        NULL',
+           '    };',
+           '    for (size_t i = 0; k_dev_exts[i]; i++)',
+           '        if (strcmp(name, k_dev_exts[i]) == 0) return 1;',
+           '    return 0;',
+           '}', '']
+    open(os.path.join(out, 'vkb_icd_gen.inc'), 'w').write('\n'.join(ic))

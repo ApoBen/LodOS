@@ -7,7 +7,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#define RING_DEFAULT_CAP (1u << 20)
+#define RING_DEFAULT_CAP (4u << 20)
 #define RING_HDR_SIZE 4096u
 
 typedef struct ring_hdr ring_hdr;

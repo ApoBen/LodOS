@@ -13,4 +13,6 @@ VkResult vkbc_vkMapMemory(vkbc *c, VkDevice device, VkDeviceMemory memory,
                           VkDeviceSize offset, VkDeviceSize size,
                           VkMemoryMapFlags flags, void **ppData);
 #endif
+int vkbc_send_fd(vkbc *c, char tag, int fd);
+int vkbc_recv_fd(vkbc *c, char expected_tag);
 #endif

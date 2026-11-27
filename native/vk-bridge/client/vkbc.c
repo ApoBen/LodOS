@@ -98,6 +98,24 @@ VkResult vkbc_vkMapMemory(vkbc *c, VkDevice device, VkDeviceMemory memory,
 
 uint8_t *vkbc__buf(vkbc *c, size_t *cap) { *cap = c->req_cap; return c->req; }
 
+int vkbc_send_fd(vkbc *c, char tag, int fd) {
+    if (!c || c->sock < 0 || fd < 0) return -EINVAL;
+    ssize_t sn = sock_send(c->sock, &tag, 1, &fd, 1);
+    return sn == 1 ? 0 : (sn < 0 ? (int)sn : -EIO);
+}
+
+int vkbc_recv_fd(vkbc *c, char expected_tag) {
+    if (!c || c->sock < 0) return -EINVAL;
+    char tag = 0;
+    int fds[SOCK_MAX_FDS], nf = 0;
+    ssize_t sn = sock_recv(c->sock, &tag, 1, fds, &nf);
+    if (sn != 1 || tag != expected_tag || nf != 1) {
+        for (int i = 0; i < nf; i++) close(fds[i]);
+        return sn < 0 ? (int)sn : -EPROTO;
+    }
+    return fds[0];
+}
+
 int vkbc__call(vkbc *c, size_t len, const uint8_t **rep, size_t *replen) {
     if (len > c->req_cap) return -EMSGSIZE;
     int rc = ring_push(&c->c2s, c->req, (uint32_t)len);
