@@ -100,6 +100,6 @@
 - Timing from the run: phosh logged `Phosh ready after 1.13s`; lodos-wl had a mapped toplevel and PPM dump. Total runner wall time was about 11s. Cleanup stopped lodos-wl and the phone guest daemons; `pgrep -x phoc`, `phosh`, `elogind`, and `dbus-daemon` returned no processes.
 
 ## T065: X11 xterm through phoc Xwayland
-- `scripts/pc-desktop.sh xwayland` enables `xwayland=true` in the phoc config for an init-managed phosh session, unlocks phosh, launches `xterm -bg red -geometry 60x20` with `DISPLAY=:0`, and waits for an xterm foreign-toplevel from `wlrctl`.
+- `scripts/pc-desktop.sh xwayland` enables `xwayland=true` in the phoc config for an init-managed phosh session, unlocks phosh, reads Xwayland's selected display and `-auth` file from its live argv, then launches `xterm -bg red -geometry 60x20` with those values. Do not assume `DISPLAY=:0`: phoc can select another display when earlier X server locks/sockets exist.
 - It dumps `docs/screens/T065-xterm.png` through lodos-wl's headless control socket, prints `XWAYLAND ok`, and shuts down xterm, phoc, phosh, and lodos-init with the managed-session cleanup path.
 - `scripts/pc-guest.sh setup` includes Debian's `xwayland`, `xterm`, and `x11-apps` packages in its idempotent package set. The `xwayland` desktop mode checks those package statuses before boot and runs setup if the existing guest rootfs predates the package list.
