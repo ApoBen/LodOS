@@ -15,5 +15,5 @@ else: assert j["blockers"],"works=false needs blockers"
 print(j["verdict"],j.get("vkcube_fps"),j["bridge_vkcube_fps"])
 PY
 test -s docs/research/S1-venus.md
-adb shell 'pgrep -f "vkcube|virgl|vtest"' >/dev/null 2>&1 && { echo "processes left on phone"; exit 1; }
+adb shell 'pgrep -f "[v]kcube|[v]irgl_|[v]test_server"' >/dev/null 2>&1 && { echo "processes left on phone"; exit 1; }
 echo PASS

@@ -40,13 +40,14 @@ D18 WSI lives guest-side in ICD (surface/swapchain local objects, present=readba
 D19 audio v0 = guest pulseaudio raw-PCM unix sink -> Rust lodos-audio -> AAudio (T049); pipewire later
 D20 lodos-fg started early (T068, offscreen FSR1 core) as pure-PC lane filler; present hook after
 D21 runner pcdisplay detection greps task text -> non-display tasks must avoid words lodos-wl/phoc/phosh/wayland(lowercase)/pc-guest
+D22 implementer sandboxes may lack GPU: never add SwiftShader/llvmpipe fallbacks to GPU harnesses; GPU proof only from runner accept (real GPU); accepts reject sw renderers
 D10 own repo of custom builds (mesa/zink, bridge, box64, fex, wine, dxvk)
 
 ## HARD LIMITS (unsolvable rootless)
 real systemd; flatpak/snap/docker/podman (no userns); kernel anticheat; VA-API hw decode; raw sockets/<1024 ports/vpn/kmods; direct usb/bt; 16K-page devices problematic (future)
 
 ## RISKS
-R1 mali vulkan bridge glibc<->bionic (boundary proven T019; remaining: full API surface/pNext/memory) | R2 mali lacks BCn etc -> transcode | R3 own wayland host (shm CPU path ok T022; zero-copy AHB/dmabuf pending) | R4 mutter can't nest in wayland -> headless+pipewire or patch | R5 fex under proot | R6 phantom process killer -> onboarding guide | R7 HyperOS blocks 1st adb install (guardprovider missing; manual 1st install worked) -> end users may hit MIUI restrictions | R8 app-uid: nativeLibDir exec + dma_heap ok (T017/T020) CLOSED | R10 proot rootfs+apt at app uid OK (T020) CLOSED; first-run extract 1.95s native (T026) CLOSED | R11 Mali DMA_BUF export broken (getMemoryFd fd=-1) -> export only via AHB; dma_heap ok at app uid | R12 vk-layer ICD handles (loader magic) -> bridge must use vk_icdGetInstanceProcAddr; libcutils non-NDK (T014) | R13 shell uid can't bind path AF_UNIX (SELinux); app uid OK (T017) -> abstract/unix2abstract only for adb spikes | R17 bridge mapped mem = memfd shadow + memcpy sync on flush/submit/wait (T029) -> perf cost for big buffers; later AHB-backed zero-copy | R14 ring spin vs futex: short spin -> 100x latency; need adaptive spin/per-thread tuning (power) | R15 proot cgroup2 ro -> elogind no sessions/polkit (T025) | R18 lodos-init guest musl static built (T039 CLOSED-ish; aarch64 run untested) | R19 phoc nests w/o new protocols (T037 CLOSED-ish); phoc ignores request_state resize -> mode pinned via phoc.ini | R16 phone adb drops on PC suspend/resume -> phone tasks stall | R20 zink over ICD: 354 GDPA misses (T041); no WSI in bridge -> T047 guest-side WSI (readback+wl_shm v0, AHB zero-copy later) | R22 phosh gestures in wlctl are fixed fractions @720x1600 phosh 0.46; keypad auto-hides (T042) | R21 rootless => no zram for lite mode; use smaller rootfs/mem limits | R23 ICD WSI v0: 2 CPU copies/frame + sync present + no OUT_OF_DATE/resize (T047) -> AHB zero-copy later | R25 mesa wayland EGL needs DRM render node in dmabuf feedback for kopper (T051); phone proot has no /dev/dri -> custom mesa/kopper patch (D10) | R24 audio guest relay = socat stopgap (T049); replace w/ tiny static relay | R26 parallel lanes: runner commits with add -A -> one lane's files land in another task's commit (T052 code in 'T027: blocked'); history attribution only, not data loss | R27 lanes share build/ dirs: accept scripts touching same outputs (build/vk-bridge/host-triangle) race (T027 a4 vs T058); codex sandbox has no GPU -> GPU checks only valid in runner accept | R28 rootfs manifest URL/sha placeholders (T060) -> need published rootfs artifact (own mirror, R9) before P1 release | R9 lxc rootfs URLs rotate ~3d -> fetch script resolves latest; pin own mirror for release
+R1 mali vulkan bridge glibc<->bionic (boundary proven T019; remaining: full API surface/pNext/memory) | R2 mali lacks BCn etc -> transcode | R3 own wayland host (shm CPU path ok T022; zero-copy AHB/dmabuf pending) | R4 mutter can't nest in wayland -> headless+pipewire or patch | R5 fex under proot | R6 phantom process killer -> onboarding guide | R7 HyperOS blocks 1st adb install (guardprovider missing; manual 1st install worked) -> end users may hit MIUI restrictions | R8 app-uid: nativeLibDir exec + dma_heap ok (T017/T020) CLOSED | R10 proot rootfs+apt at app uid OK (T020) CLOSED; first-run extract 1.95s native (T026) CLOSED | R11 Mali DMA_BUF export broken (getMemoryFd fd=-1) -> export only via AHB; dma_heap ok at app uid | R12 vk-layer ICD handles (loader magic) -> bridge must use vk_icdGetInstanceProcAddr; libcutils non-NDK (T014) | R13 shell uid can't bind path AF_UNIX (SELinux); app uid OK (T017) -> abstract/unix2abstract only for adb spikes | R17 bridge mapped mem = memfd shadow + memcpy sync on flush/submit/wait (T029) -> perf cost for big buffers; later AHB-backed zero-copy | R14 ring spin vs futex: short spin -> 100x latency; need adaptive spin/per-thread tuning (power) | R15 proot cgroup2 ro -> elogind no sessions/polkit (T025) | R18 lodos-init guest musl static built (T039 CLOSED-ish; aarch64 run untested) | R19 phoc nests w/o new protocols (T037 CLOSED-ish); phoc ignores request_state resize -> mode pinned via phoc.ini | R16 phone adb drops on PC suspend/resume -> phone tasks stall | R20 zink over ICD: 354 GDPA misses (T041); no WSI in bridge -> T047 guest-side WSI (readback+wl_shm v0, AHB zero-copy later) | R22 phosh gestures in wlctl are fixed fractions @720x1600 phosh 0.46; keypad auto-hides (T042) | R21 rootless => no zram for lite mode; use smaller rootfs/mem limits | R23 ICD WSI v0: 2 CPU copies/frame + sync present + no OUT_OF_DATE/resize (T047) -> AHB zero-copy later | R25 mesa wayland EGL needs DRM render node in dmabuf feedback for kopper (T051); phone proot has no /dev/dri -> custom mesa/kopper patch (D10) | R24 audio guest relay = socat stopgap (T049); replace w/ tiny static relay | R26 parallel lanes: runner commits with add -A -> one lane's files land in another task's commit (T052 code in 'T027: blocked'); history attribution only, not data loss | R27 lanes share build/ dirs: accept scripts touching same outputs (build/vk-bridge/host-triangle) race (T027 a4 vs T058); codex sandbox has no GPU -> GPU checks only valid in runner accept; codex then 'fixes' by adding SW fallbacks (T067) -> D22 | R28 rootfs manifest URL/sha placeholders (T060) -> need published rootfs artifact (own mirror, R9) before P1 release | R9 lxc rootfs URLs rotate ~3d -> fetch script resolves latest; pin own mirror for release
 
 ## PHASES
 P0 spikes: S1 mali bridge vkcube+zink glxgears | S2 wayland host+nested phoc+zero-copy | S3 phosh/gnome48 w/ elogind+mini-init (+test systemd --user standalone) | S4 box64+wine arm64ec in proot, Hades
@@ -112,7 +113,7 @@ P5 generalize + github + CI
 [x] T052 session UI Start/Stop + POST_NOTIFICATIONS + SessionUiModel, 6 JVM tests (codex)
 [x] T053 lite mode wired into GuestLaunch (env + gsettings bind), 5 JVM tests (codex)
 [x] T054 audio in APK: lodos-audio staged, AudioBridge in FGS, guest pulse cfg, 4 JVM tests; phone playback untested (codex)
-[ ] T055 S1-alt Venus+virglrenderer vtest on phone vs vk-bridge (neon, phone, after T043)
+[ ] T055 S1-alt Venus+virglrenderer vtest vs vk-bridge; a2: virgl needs epoxy+log.h, bridge proxy no server; accept pgrep fixed; max5 (phone)
 [ ] T056 S1-alt in-process Vulkan wrapper ICD on phone vs vk-bridge (neon, phone, after T043)
 [ ] T057 P1 "Linux Terminal" 2nd launcher icon: TerminalActivity (termux terminal libs) -> guest bash PTY, no phosh (neon, phone)
 [x] T058 vkCmd* batching per cmdbuf (flush at End), VKB_NO_BATCH fallback; Arc 120 vs 129 calls; blocked was accept regex bug (reviewer fixed+reran) (codex)
@@ -122,12 +123,15 @@ P5 generalize + github + CI
 [x] T062 docs/research/S4-wine.md: ARM64EC+FEX long-term, box64+x86_64 wine fallback; DXVK needs > Mali ICD features (codex)
 [x] T063 ICD GDPA misses 354->249 (373 cmds bridged, 24 stubs), Arc zink+syncfd OK (codex)
 [x] T064 P1 /sdcard: StorageAccess API-aware grant, guest bind gated on grant, 5 JVM tests (codex)
-[ ] T065 PC Xwayland xterm, PNG; reset review30: lazy Xwayland -> DISPLAY from phosh environ, no auth, fallback standalone Xwayland (carbon, pcdisplay)
+[x] T065 PC Xwayland xterm under phosh, PNG verified (DISPLAY from session, lazy Xwayland) (codex)
 [x] T066 P1 input: DisplayActivity touch/key -> JNI -> seat, 11 cargo + JVM tests; phone untested (codex)
-[ ] T067 R25 kopper/zink wayland w/o render node: research+mesa patch+PC PNG (carbon, pcdisplay)
+[x] T067 R25 mesa kopper/zink wayland w/o render node: patch + eglgears PNG on Arc; blocked was harness SwiftShader fallback (reviewer fixed) (codex)
 [x] T068 lodos-fg v0 FSR1 EASU+RCAS on Arc: grad energy 0.017 vs bilinear 0.007, PNG (codex)
-[ ] T069 lodos-fg v1 layer: shrink swapchain + FSR1 at present, headless surface test (carbon, pure PC)
-[ ] T070 P1 SettingsActivity lite+fg preset -> GuestLaunch env, JVM tests (neon, gradle)
+[ ] T069 lodos-fg v1a: layer skeleton rewrite (crash=recursion via mesa device_select) + caps scaling (carbon, pure PC)
+[ ] T071 lodos-fg v1b: proxy swapchain + FSR1 at present + PNG dump (carbon, pure PC, after T069)
+[x] T070 P1 SettingsActivity lite+fg preset -> GuestLaunch env, 6 JVM tests (codex)
+[ ] T072 P1 onboarding: phantom killer + battery opt + HyperOS hints, JVM tests (neon, gradle)
+[ ] T073 PC GPU desktop: phoc gles2/vulkan on zink via ICD (Arc), phosh PNG (carbon, pcdisplay)
 (live status: task files frontmatter)
 
 ## OPEN (need user)
@@ -142,6 +146,7 @@ P5 generalize + github + CI
 (none)
 
 ## LOG (newest first, 1 line each)
+2026-11-27 review31: T065,T070 ok (PNG red xterm; 6 JVM); T067 blocked=harness swiftshader fallback -> fixed, rerun PASS on Arc (gears PNG) -> done; T069 stub crashed (device_select recursion) -> split T069 skeleton + T071 FSR present; T055 accept pgrep fix + REVIEW, max5; +T072 onboarding (gradle) T073 GPU phosh (pcdisplay); D22
 2026-11-27 review30: T063 (gdpa 249), T066, T068 ok (accept PASS); T065 blocked 5x (lazy Xwayland, so argv scan finds nothing) -> reset carbon max4 with new approach; +T069 fg layer (pure PC), T070 settings (gradle); T067 mesa patch already in UPSTREAM.md; R29 closed
 2026-11-27 review29: T064 ok (accept PASS); T065 blocked=guest lacks python3 -> todo max5 REVIEW host-side scan; T063 a2 running; +T066 input (gradle) T067 kopper no-render (pcdisplay) T068 lodos-fg FSR1 (pure PC); D20 D21
 2026-11-27 review28: T027,T060,T061,T062 ok (accept PASS); T028 a2 fail = phone off adb (todo); phone tasks T028/T055-57 stalled -> +T063 pure PC, T064 gradle, T065 pcdisplay (3 lanes)
