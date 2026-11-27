@@ -5,7 +5,8 @@
   "zink_glxgears_fps": null,
   "missing_exts": [],
   "blockers": [
-    "Android NDK build failed; see build/T055-venus.log Bridge baseline unavailable: guest-vkbridge-test.sh failed; see build/T055-venus.log"
+    "Android NDK build failed; see build/T055-venus.log",
+    "Bridge baseline unavailable: guest-vkbridge-test.sh failed; see build/T055-venus.log"
   ],
   "license": "MIT",
   "verdict": "reject"

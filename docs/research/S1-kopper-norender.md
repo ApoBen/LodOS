@@ -22,4 +22,4 @@ Mesa release notes document `LIBGL_KOPPER_DRI2` handling for X11, while Wayland 
 
 ## PC proof
 
-`native/vk-bridge/test/host_zink_norender.sh` builds Mesa out of tree under `build/mesa-pc`, starts lodos-wl with `LODOS_WL_NO_DMABUF=1`, runs `eglgears_wayland` through Zink and the LodOS ICD, checks present/frame output, and writes `docs/screens/T067-eglgears-norender.png`. The test prints `NORENDER ok` on completion.
+`native/vk-bridge/test/host_zink_norender.sh` builds Mesa out of tree under `build/mesa-pc`, starts lodos-wl with `LODOS_WL_NO_DMABUF=1`, runs `eglgears_wayland` through Zink and the LodOS ICD, checks present/frame output, and writes `docs/screens/T067-eglgears-norender.png`. The test prints `NORENDER ok` on completion. Local build verification passed; on this runner, Vulkan enumeration reaches the LodOS ICD but Zink does not select a pdev, so the screenshot portion remains unverified.

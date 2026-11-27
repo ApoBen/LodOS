@@ -11,5 +11,5 @@
 - What: `LIBGL_KOPPER_DRI2=1` selects Wayland's swrast/Kopper loader path for forced Zink without requiring a DRM render node; the same no-node EGLDevice handling is applied to X11 and surfaceless initialization.
 - Why: Mesa's Wayland DRM path requires render-node feedback. In a rootless guest, the Vulkan ICD is reachable while `/dev/dri` is absent, so the standard EGL initialization falls back or fails before Zink Kopper can use its Vulkan WSI.
 - Reproduce: run `MESA_LOADER_DRIVER_OVERRIDE=zink LIBGL_KOPPER_DRI2=1 EGL_PLATFORM=wayland eglinfo -B -p wayland` against a Wayland compositor that advertises no `zwp_linux_dmabuf_v1` feedback, with a functioning Vulkan ICD.
-- Tested: pending PC acceptance run via `native/vk-bridge/test/host_zink_norender.sh`.
+- Tested: Mesa 26.2.5 x86_64 Zink build completed. Runtime via `host_zink_norender.sh` enters patched Wayland EGL and reaches Vulkan device selection, but this runner cannot create a Zink pdev (SwiftShader backend also returns no selectable pdev); the frame/screenshot proof remains pending.
 - Upstreamable: yes, candidate. This adds an opt-in path equivalent to the established X11 `LIBGL_KOPPER_DRI2` switch for clients backed by a Vulkan device with no DRM node.
