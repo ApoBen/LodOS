@@ -455,6 +455,12 @@ impl App {
             .map(|l| (l.toplevel.wl_surface().clone(), (l.position.0 as f64, l.position.1 as f64).into()))
     }
 
+    /// Toplevels that have committed a buffer (ctl `toplevels`, T050).
+    #[cfg(feature = "headless")]
+    pub(crate) fn mapped_toplevel_count(&self) -> usize {
+        self.layers.iter().filter(|l| l.size.0 > 0 && l.size.1 > 0).count()
+    }
+
     fn focus_surface(&mut self, surface: Option<WlSurface>) {
         if let Some(kbd) = self.seat.get_keyboard() {
             let serial = SERIAL_COUNTER.next_serial();

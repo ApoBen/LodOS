@@ -15,7 +15,7 @@ RFS=$ROOT/build/pc-rootfs
 TARBALL=$ROOT/build/rootfs/debian-trixie-amd64.tar.xz
 PROOT=$ROOT/build/proot/x86_64/proot
 STATE=$ROOT/build/pc-guest          # proot tmp + /dev/shm backing
-PKGS=${PKGS:-"phoc phosh foot wayland-utils weston dbus elogind gnome-settings-daemon-common librsvg2-common"}
+PKGS=${PKGS:-"phoc phosh foot wayland-utils weston dbus elogind gnome-settings-daemon-common librsvg2-common gnome-text-editor gnome-calculator wlrctl"}
 # D3 systemd-free swap (same as phone scripts/guest-init.sh): elogind Conflicts systemd
 INIT_PKGS="sysvinit-core libpam-elogind dbus-x11"
 DROP_PKGS="systemd systemd-sysv dbus-user-session libpam-systemd"

@@ -13,6 +13,8 @@
 //! key <evdev-key-code> 0|1          (e.g. KEY_ENTER=28)
 //! dump <path.ppm>                   (framebuffer -> binary PPM, reply after write)
 //! ping                              (no-op, ok)
+//! toplevels                         (reply `ok <n>`: mapped xdg_toplevels of all clients, T050;
+//!                                    nested phoc = 1 — its app windows are not visible here)
 //! ```
 //! Coordinates are host output logical pixels (floats accepted). Empty lines / `#` comments ignored.
 
@@ -70,6 +72,7 @@ pub fn parse_ctl_line(line: &str) -> Result<Option<CtlCmd>, String> {
             ControlMsg::DumpPpm(PathBuf::from(p))
         }
         ("ping", None) => return Ok(Some(CtlCmd::Nop)),
+        ("toplevels", None) => return Ok(Some(CtlCmd::Toplevels)),
         _ => return Err(format!("unknown command '{line}'")),
     };
     Ok(Some(CtlCmd::Msg(msg)))
@@ -80,6 +83,8 @@ pub fn parse_ctl_line(line: &str) -> Result<Option<CtlCmd>, String> {
 pub enum CtlCmd {
     Msg(ControlMsg),
     Nop,
+    /// query: count of mapped toplevels (reply `ok <n>`)
+    Toplevels,
 }
 
 /// Binds `path` and registers the listener + per-connection line readers on the event loop.
@@ -131,6 +136,9 @@ fn add_conn(h: &LoopHandle<'static, App>, stream: UnixStream) -> Result<(), Stri
             match parse_ctl_line(&line) {
                 Ok(None) => continue,
                 Ok(Some(CtlCmd::Nop)) => out.extend_from_slice(b"ok\n"),
+                Ok(Some(CtlCmd::Toplevels)) => {
+                    out.extend_from_slice(format!("ok {}\n", app.mapped_toplevel_count()).as_bytes())
+                }
                 Ok(Some(CtlCmd::Msg(m))) => {
                     app.handle_control(m);
                     out.extend_from_slice(b"ok\n");
@@ -176,9 +184,10 @@ mod tests {
         assert!(matches!(m("key 28 0"), ControlMsg::Key { evdev_code: 28, pressed: false }));
         assert!(matches!(m("dump /tmp/a b.ppm"), ControlMsg::DumpPpm(p) if p == Path::new("/tmp/a b.ppm")));
         assert!(matches!(parse_ctl_line("ping"), Ok(Some(CtlCmd::Nop))));
+        assert!(matches!(parse_ctl_line("toplevels\n"), Ok(Some(CtlCmd::Toplevels))));
         assert!(matches!(parse_ctl_line("  # c"), Ok(None)));
         assert!(matches!(parse_ctl_line(""), Ok(None)));
-        for bad in ["touch down 0 1", "touch down x 1 2", "btn 272 2", "key 28", "dump", "frob", "touch", "ptr move 1 nan", "touch up"] {
+        for bad in ["touch down 0 1", "touch down x 1 2", "btn 272 2", "key 28", "dump", "frob", "touch", "ptr move 1 nan", "touch up", "toplevels 1"] {
             assert!(parse_ctl_line(bad).is_err(), "should reject: {bad}");
         }
     }

@@ -8,6 +8,7 @@ usage:
   wlctl.py <sock> key code [code...]           press+release evdev keys in order
   wlctl.py <sock> type 'text'                  type ASCII text via evdev keys (US layout, \n = Enter)
   wlctl.py <sock> dump out.ppm                 framebuffer dump (absolute path recommended)
+  wlctl.py <sock> toplevels                    print count of mapped xdg_toplevels (nested phoc = 1)
   wlctl.py <sock> raw 'line' ['line'...]       send raw protocol lines
 """
 import os
@@ -45,8 +46,9 @@ class Ctl:
             self.buf += d
         rep, self.buf = self.buf.split(b"\n", 1)
         rep = rep.decode()
-        if rep != "ok":
+        if rep != "ok" and not rep.startswith("ok "):
             raise SystemExit(f"wlctl: {line!r} -> {rep}")
+        return rep[3:]
 
     def tap(self, x, y, ms=60):
         self.cmd(f"touch down 0 {x} {y}")
@@ -105,6 +107,8 @@ def main(a):
         c.type(args[0].replace("\\n", "\n"))
     elif op == "dump" and len(args) == 1:
         c.cmd("dump " + os.path.abspath(args[0]))
+    elif op == "toplevels" and not args:
+        print(c.cmd("toplevels"))
     elif op == "raw" and args:
         for line in args:
             c.cmd(line)

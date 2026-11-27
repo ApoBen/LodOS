@@ -87,3 +87,8 @@
 - Timings: lodos-init start to phosh spawned is about 0.27 s, and the lockscreen is mapped in lodos-wl under 1 s after guest start. Shutdown takes about 2 s, almost all of it phosh. No lodos-init code change was needed, and all 16 tests still pass.
 - Gotcha: the D3 core order (dbus, then elogind first) only applies in BootstrapMode::Auto when units named dbus.service/elogind.service exist. Overriding by name keeps that path in use. All other stock units in the rootfs (getty, networkd, ...) are ignored because only `lodos-phosh.target.wants` is read.
 - Phone port next: the same units with an aarch64 build. The phone also needs the T021 shims (unix2abstract, elogind-shim) as Environment=LD_PRELOAD in the dbus/elogind units.
+- T050 app smoke (`pc-desktop.sh apps`, init-phosh boot): foot, gnome-text-editor 48, gnome-calculator 48 launch from phosh grid, map, render, close; PNGs docs/screens/T050-*.png.
+- lodos-wl ctl `toplevels` -> `ok <n>` (mapped xdg_toplevels); under nested phoc always 1 (phoc's output window) -> app windows are invisible to lodos-wl; app state comes from guest `wlrctl toplevel list|close` (wlr-foreign-toplevel on phoc wayland-0, separate proot sharing rootfs + /run/host-xdg).
+- grid launch: fresh session shows "mobile friendly" only (foot hidden) -> tap "Show All Apps" once; then tap search (y 0.045), type name, tap 1st cell (0.07,0.091); search clears after launch. GTK4 apps get keyboard via lodos-wl ctl `key`.
+- close: foot/calculator exit on foreign-toplevel close (<1s); text-editor with unsaved draft shows a save dialog -> driver falls back to SIGTERM after 6s.
+- comm names truncate to 15 chars (`gnome-calculato`): `pgrep -x gnome-calculator` never matches; use the 15-char comm or tracked pids.
