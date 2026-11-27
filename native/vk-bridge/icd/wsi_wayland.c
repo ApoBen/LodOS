@@ -41,7 +41,7 @@ static struct {
     int (*roundtrip_queue)(struct wl_display *, struct wl_event_queue *);
     int (*dispatch_queue_pending)(struct wl_display *, struct wl_event_queue *);
     int (*flush)(struct wl_display *);
-    const struct wl_interface *registry_if, *shm_if, *pool_if, *buffer_if;
+    const struct wl_interface *registry_if, *shm_if, *pool_if, *buffer_if, *callback_if;
 } wl;
 
 static pthread_mutex_t g_wsi_mu = PTHREAD_MUTEX_INITIALIZER;
@@ -71,6 +71,7 @@ static int wsi_wl_load(void) {
             ok &= WL_SYM(wl.shm_if, "wl_shm_interface") != NULL;
             ok &= WL_SYM(wl.pool_if, "wl_shm_pool_interface") != NULL;
             ok &= WL_SYM(wl.buffer_if, "wl_buffer_interface") != NULL;
+            ok &= WL_SYM(wl.callback_if, "wl_callback_interface") != NULL;
 #undef WL_SYM
             wl.ok = ok;
         }
@@ -169,14 +170,27 @@ static VKAPI_ATTR VkResult VKAPI_CALL icd_vkGetPhysicalDeviceSurfaceFormatsKHR(
 static VKAPI_ATTR VkResult VKAPI_CALL icd_vkGetPhysicalDeviceSurfacePresentModesKHR(
     VkPhysicalDevice pd, VkSurfaceKHR surface, uint32_t *pCount, VkPresentModeKHR *pModes) {
     (void)pd; (void)surface;
-    static const VkPresentModeKHR k_modes[] = { VK_PRESENT_MODE_FIFO_KHR, VK_PRESENT_MODE_MAILBOX_KHR };
+    static const VkPresentModeKHR k_modes[] = {
+        VK_PRESENT_MODE_FIFO_KHR, VK_PRESENT_MODE_IMMEDIATE_KHR, VK_PRESENT_MODE_MAILBOX_KHR,
+    };
     if (!pCount) return VK_ERROR_INITIALIZATION_FAILED;
-    uint32_t n = 2;
+    uint32_t n = sizeof(k_modes) / sizeof(k_modes[0]);
     if (!pModes) { *pCount = n; return VK_SUCCESS; }
     uint32_t c = *pCount < n ? *pCount : n;
     memcpy(pModes, k_modes, c * sizeof(k_modes[0]));
     *pCount = c;
     return c < n ? VK_INCOMPLETE : VK_SUCCESS;
+}
+
+static VKAPI_ATTR VkResult VKAPI_CALL icd_vkGetPhysicalDevicePresentRectanglesKHR(
+    VkPhysicalDevice pd, VkSurfaceKHR surface, uint32_t *pRectCount, VkRect2D *pRects) {
+    (void)pd; (void)surface;
+    if (!pRectCount) return VK_ERROR_INITIALIZATION_FAILED;
+    if (!pRects) { *pRectCount = 1; return VK_SUCCESS; }
+    if (*pRectCount == 0) return VK_INCOMPLETE;
+    pRects[0] = (VkRect2D){ { 0, 0 }, { 8192, 8192 } };
+    *pRectCount = 1;
+    return VK_SUCCESS;
 }
 
 /* ---- swapchain ---- */
@@ -202,7 +216,7 @@ typedef struct {
     wsi_image *img;
     VkCommandPool pool;
     struct wl_event_queue *queue;
-    struct wl_proxy *registry, *shm, *pool_proxy;
+    struct wl_proxy *dpy_wrap, *registry, *shm, *pool_proxy, *sync_cb;
     int shm_fd;
     void *shm_ptr;
     size_t shm_size, img_bytes;
@@ -224,6 +238,14 @@ static const struct { void (*global)(void *, struct wl_proxy *, uint32_t, const 
 
 static void wsi_buffer_release(void *data, struct wl_proxy *buf) { (void)buf; ((wsi_image *)data)->busy = 0; }
 static const struct { void (*release)(void *, struct wl_proxy *); } k_buffer_listener = { wsi_buffer_release };
+
+static void wsi_sync_done(void *data, struct wl_proxy *cb, uint32_t d) {
+    (void)d;
+    wsi_swapchain *sc = data;
+    wl.proxy_destroy(cb);
+    if (sc->sync_cb == cb) sc->sync_cb = NULL;
+}
+static const struct { void (*done)(void *, struct wl_proxy *, uint32_t); } k_sync_listener = { wsi_sync_done };
 
 static int wsi_find_memtype(icd_device *dev, uint32_t bits, VkMemoryPropertyFlags want, VkMemoryPropertyFlags pref) {
     VkPhysicalDeviceMemoryProperties mp;
@@ -266,10 +288,12 @@ static void wsi_swapchain_free(wsi_swapchain *sc) {
         }
     }
     if (sc->pool) icd_vkDestroyCommandPool(d, sc->pool, NULL);
+    if (sc->sync_cb) wl.proxy_destroy(sc->sync_cb);
     if (sc->pool_proxy) wl.marshal_flags(sc->pool_proxy, 1 /* wl_shm_pool.destroy */, NULL,
                                          wl.get_version(sc->pool_proxy), WSI_WL_MARSHAL_FLAG_DESTROY);
     if (sc->shm) wl.proxy_destroy(sc->shm);
     if (sc->registry) wl.proxy_destroy(sc->registry);
+    if (sc->dpy_wrap) wl.wrapper_destroy(sc->dpy_wrap);
     if (sc->surf && wl.ok) wl.flush(sc->surf->display);
     if (sc->queue) wl.queue_destroy(sc->queue);
     if (sc->shm_ptr) munmap(sc->shm_ptr, sc->shm_size);
@@ -282,12 +306,11 @@ static VkResult wsi_wl_setup(wsi_swapchain *sc) {
     struct wl_display *dpy = sc->surf->display;
     sc->queue = wl.create_queue(dpy);
     if (!sc->queue) return VK_ERROR_SURFACE_LOST_KHR;
-    struct wl_proxy *wrap = wl.create_wrapper(dpy);
-    if (!wrap) return VK_ERROR_SURFACE_LOST_KHR;
-    wl.set_queue(wrap, sc->queue);
-    sc->registry = wl.marshal_flags(wrap, 1 /* wl_display.get_registry */, wl.registry_if,
-                                    wl.get_version(wrap), 0, NULL);
-    wl.wrapper_destroy(wrap);
+    sc->dpy_wrap = wl.create_wrapper(dpy);
+    if (!sc->dpy_wrap) return VK_ERROR_SURFACE_LOST_KHR;
+    wl.set_queue(sc->dpy_wrap, sc->queue);
+    sc->registry = wl.marshal_flags(sc->dpy_wrap, 1 /* wl_display.get_registry */, wl.registry_if,
+                                    wl.get_version(sc->dpy_wrap), 0, NULL);
     if (!sc->registry) return VK_ERROR_SURFACE_LOST_KHR;
     wl.add_listener(sc->registry, (void (**)(void))&k_registry_listener, sc);
     if (wl.roundtrip_queue(dpy, sc->queue) < 0 || !sc->shm) return VK_ERROR_SURFACE_LOST_KHR;
@@ -485,6 +508,31 @@ static VKAPI_ATTR VkResult VKAPI_CALL icd_vkAcquireNextImageKHR(
     return VK_SUCCESS;
 }
 
+static VKAPI_ATTR VkResult VKAPI_CALL icd_vkAcquireNextImage2KHR(
+    VkDevice device, const VkAcquireNextImageInfoKHR *pAcquireInfo, uint32_t *pImageIndex) {
+    if (!pAcquireInfo) return VK_ERROR_INITIALIZATION_FAILED;
+    return icd_vkAcquireNextImageKHR(device, pAcquireInfo->swapchain, pAcquireInfo->timeout,
+                                     pAcquireInfo->semaphore, pAcquireInfo->fence, pImageIndex);
+}
+
+static VKAPI_ATTR VkResult VKAPI_CALL icd_vkGetDeviceGroupPresentCapabilitiesKHR(
+    VkDevice device, VkDeviceGroupPresentCapabilitiesKHR *pCaps) {
+    (void)device;
+    if (!pCaps) return VK_ERROR_INITIALIZATION_FAILED;
+    memset(pCaps->presentMask, 0, sizeof(pCaps->presentMask));
+    pCaps->presentMask[0] = 1u;
+    pCaps->modes = VK_DEVICE_GROUP_PRESENT_MODE_LOCAL_BIT_KHR;
+    return VK_SUCCESS;
+}
+
+static VKAPI_ATTR VkResult VKAPI_CALL icd_vkGetDeviceGroupSurfacePresentModesKHR(
+    VkDevice device, VkSurfaceKHR surface, VkDeviceGroupPresentModeFlagsKHR *pModes) {
+    (void)device; (void)surface;
+    if (!pModes) return VK_ERROR_INITIALIZATION_FAILED;
+    *pModes = VK_DEVICE_GROUP_PRESENT_MODE_LOCAL_BIT_KHR;
+    return VK_SUCCESS;
+}
+
 static VkResult wsi_present_one(VkQueue queue, wsi_swapchain *sc, uint32_t idx,
                                 uint32_t nwait, const VkSemaphore *waits) {
     if (idx >= sc->nimg || !sc->img[idx].acquired) return VK_ERROR_OUT_OF_DATE_KHR;
@@ -503,7 +551,7 @@ static VkResult wsi_present_one(VkQueue queue, wsi_swapchain *sc, uint32_t idx,
 
     struct wl_display *dpy = sc->surf->display;
     wl.dispatch_queue_pending(dpy, sc->queue);
-    for (int tries = 0; im->busy && tries < 4; tries++)
+    for (int tries = 0; (sc->sync_cb || im->busy) && tries < 4; tries++)
         if (wl.roundtrip_queue(dpy, sc->queue) < 0) return VK_ERROR_SURFACE_LOST_KHR;
     memcpy((uint8_t *)sc->shm_ptr + sc->img_bytes * idx, im->buf_ptr, sc->img_bytes);
 
@@ -516,6 +564,14 @@ static VkResult wsi_present_one(VkQueue queue, wsi_swapchain *sc, uint32_t idx,
         wl.marshal_flags(ws, 2 /* wl_surface.damage */, NULL, sv, 0, 0, 0, INT32_MAX, INT32_MAX);
     wl.marshal_flags(ws, 6 /* wl_surface.commit */, NULL, sv, 0);
     im->busy = 1;
+    /* Queue an async wl_display.sync on sc->queue before flushing so the compositor replies with
+     * wl_display.delete_id (on display_queue) + wl_buffer.release after present returns, waking
+     * poll()+wl_display_dispatch() loops (e.g. eglut_wayland) without blocking on default_queue. */
+    if (!sc->sync_cb && sc->dpy_wrap) {
+        sc->sync_cb = wl.marshal_flags(sc->dpy_wrap, 0 /* wl_display.sync */, wl.callback_if,
+                                       wl.get_version(sc->dpy_wrap), 0, NULL);
+        if (sc->sync_cb) wl.add_listener(sc->sync_cb, (void (**)(void))&k_sync_listener, sc);
+    }
     if (wl.flush(dpy) < 0) return VK_ERROR_SURFACE_LOST_KHR;
     uint64_t np = __atomic_add_fetch(&g_wsi_presents, 1, __ATOMIC_RELAXED);
     static long every = -1; /* LODOS_VK_WSI_STATS_EVERY=N: periodic stat (apps killed by signal skip dtor) */
@@ -556,11 +612,15 @@ static const proc_ent k_wsi_pdev_procs[] = {
     ENT("vkGetPhysicalDeviceSurfaceCapabilitiesKHR", icd_vkGetPhysicalDeviceSurfaceCapabilitiesKHR),
     ENT("vkGetPhysicalDeviceSurfaceFormatsKHR", icd_vkGetPhysicalDeviceSurfaceFormatsKHR),
     ENT("vkGetPhysicalDeviceSurfacePresentModesKHR", icd_vkGetPhysicalDeviceSurfacePresentModesKHR),
+    ENT("vkGetPhysicalDevicePresentRectanglesKHR", icd_vkGetPhysicalDevicePresentRectanglesKHR),
 };
 static const proc_ent k_wsi_dev_procs[] = {
     ENT("vkCreateSwapchainKHR", icd_vkCreateSwapchainKHR),
     ENT("vkDestroySwapchainKHR", icd_vkDestroySwapchainKHR),
     ENT("vkGetSwapchainImagesKHR", icd_vkGetSwapchainImagesKHR),
     ENT("vkAcquireNextImageKHR", icd_vkAcquireNextImageKHR),
+    ENT("vkAcquireNextImage2KHR", icd_vkAcquireNextImage2KHR),
+    ENT("vkGetDeviceGroupPresentCapabilitiesKHR", icd_vkGetDeviceGroupPresentCapabilitiesKHR),
+    ENT("vkGetDeviceGroupSurfacePresentModesKHR", icd_vkGetDeviceGroupSurfacePresentModesKHR),
     ENT("vkQueuePresentKHR", icd_vkQueuePresentKHR),
 };

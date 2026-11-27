@@ -117,8 +117,7 @@ static _Thread_local client *t_cli;
 
 static void *getproc(const char *name, void *ud) {
     VkInstance inst = (VkInstance)ud;
-    void *p = inst ? NULL : dlsym(g_lib, name);
-    if (!p && g_gipa) p = (void *)g_gipa(inst, name);
+    void *p = g_gipa ? (void *)g_gipa(inst, name) : (inst ? NULL : dlsym(g_lib, name));
     if (!p && g_gipa && inst) {
         static const char *const sfx[] = { "KHR", "EXT" };
         for (size_t i = 0; i < 2 && !p; i++) {
@@ -525,15 +524,13 @@ static VKAPI_ATTR VkResult VKAPI_CALL srv_wrap_vkCreateInstance(
     VkResult r = g_real_fns.vkCreateInstance(pCI, pAlloc, pInst);
     if (r == VK_SUCCESS && pInst && *pInst && g_gipa) {
         pthread_mutex_lock(&g_load_mu);
-        if (!g_gdpa) g_gdpa = (PFN_vkGetDeviceProcAddr)g_gipa(*pInst, "vkGetDeviceProcAddr");
-        if (g_missing_fns > 0) {
-            g_missing_fns = vkr_srv_load(&g_real_fns, getproc, *pInst);
+        g_gdpa = (PFN_vkGetDeviceProcAddr)g_gipa(*pInst, "vkGetDeviceProcAddr");
+        g_missing_fns = vkr_srv_load(&g_real_fns, getproc, *pInst);
 #ifdef VKB_CMD_HAS_vkMapMemory
-            if (!g_real_vkMapMemory)
-                g_real_vkMapMemory = (PFN_vkMapMemory)getproc("vkMapMemory", *pInst);
+        PFN_vkMapMemory im = (PFN_vkMapMemory)getproc("vkMapMemory", *pInst);
+        if (im) g_real_vkMapMemory = im;
 #endif
-            srv_install_wrappers();
-        }
+        srv_install_wrappers();
         pthread_mutex_unlock(&g_load_mu);
     }
     return r;
@@ -547,10 +544,12 @@ static VKAPI_ATTR VkResult VKAPI_CALL srv_wrap_vkCreateDevice(
     VkResult r = g_real_fns.vkCreateDevice(pd, pCI, pAlloc, pDev);
     if (r == VK_SUCCESS && pDev && *pDev && g_gdpa) {
         pthread_mutex_lock(&g_load_mu);
-        if (g_missing_fns > 0) {
-            g_missing_fns = vkr_srv_load(&g_real_fns, getdevproc, *pDev);
-            srv_install_wrappers();
-        }
+        g_missing_fns = vkr_srv_load(&g_real_fns, getdevproc, *pDev);
+#ifdef VKB_CMD_HAS_vkMapMemory
+        PFN_vkMapMemory dm = (PFN_vkMapMemory)getdevproc("vkMapMemory", *pDev);
+        if (dm) g_real_vkMapMemory = dm;
+#endif
+        srv_install_wrappers();
         pthread_mutex_unlock(&g_load_mu);
     }
     return r;

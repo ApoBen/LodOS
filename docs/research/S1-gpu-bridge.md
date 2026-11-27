@@ -109,6 +109,9 @@ While `bionic-vulkan-wrapper` cannot run inside the `glibc` guest, **it runs nat
 - vkQueuePresentKHR: submit(wait sems, copy) -> wait fence (server syncs shadow) -> memcpy into wl_shm pool (XRGB8888) -> attach/damage_buffer/commit/flush on a private wl_event_queue.
 - libwayland-client dlopen'ed (no build dep). Proof: `test/host_wsi.sh` vkcube 120 frames on lodos-wl headless -> docs/screens/T047-wsi.png.
 - Limits: 2 full copies/frame (GPU->shadow->shm), sync present, no resize/OUT_OF_DATE handling, fixed queue (first created). Next: AHB/dmabuf zero-copy on phone.
+- **Zink GL on Wayland (T051)**: `test/host_zinkwsi.sh` runs `eglgears_wayland` (`MESA_LOADER_DRIVER_OVERRIDE=zink` -> Kopper) over `libvulkan_lodos.so` WSI -> `vkb_server` -> Intel Arc on `lodos-wl` headless 640x480 -> `docs/screens/T051-zink-wsi.png` (120+ frames, `GL_RENDERER` = `zink Vulkan 1.3(Intel(R) Arc(tm) A750 Graphics ...)`).
+- Fixes landed: `vkb_server`/`rpcgen` overwrite device procs via `vkGetDeviceProcAddr` (+`KHR`/`EXT` fallback) instead of `dlsym`/GIPA VK1.4 core trampolines on 1.3 instances; `wsi_wayland.c` queues async `wl_display.sync` per present (waking `poll`+`wl_display_dispatch` loops via `delete_id`) and adds `IMMEDIATE` mode + `AcquireNextImage2KHR`/device-group WSI queries.
+- Mesa Wayland EGL note: hardware/Kopper `dri2_initialize_wayland_drm` requires a DRM render-node fd from `zwp_linux_dmabuf_v1` default feedback (`LODOS_WL_DMABUF_DEV` added to `lodos-wl`); on `/dev/dri`-less Android `proot`, custom Mesa (`D10`) or nested compositor will bypass `dri2_setup_device`'s DRM node requirement.
 
 ### Existing Approaches Inspected
 - **`xMeM/mesa` + `termux-x11` (`lorie`)**:

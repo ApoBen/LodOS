@@ -707,11 +707,11 @@ def emit(reg, Gen, Unsupported, cmds, out, hdr):
     open(os.path.join(out, 'vkb_rpc_client.c'), 'w').write('\n'.join(m))
 
     # ---- vkb_rpc_server.c ----------------------------------------------
-    m = [hdr, '#include "vkb_rpc.h"', '',
+    m = [hdr, '#include "vkb_rpc.h"', '#include <stdio.h>', '',
          'int vkr_srv_load(vkr_srv_fns *f, void *(*getproc)(const char *name, void *ud), void *ud) {',
          '    int miss = 0;']
     for c in ok:
-        m.append('    if (!f->%s && !(f->%s = (PFN_%s)getproc("%s", ud))) miss++;' % (c, c, c, c))
+        m.append('    { PFN_%s p_ = (PFN_%s)getproc("%s", ud); if (p_) f->%s = p_; else if (!f->%s) miss++; }' % (c, c, c, c, c))
     m += ['    return miss;', '}', '',
           'static VkResult vkr_err_res(int e) { return e == VKR_E_PNEXT ? VK_ERROR_FEATURE_NOT_PRESENT : VK_ERROR_UNKNOWN; }', '']
     for c in ok:
@@ -843,7 +843,7 @@ def emit(reg, Gen, Unsupported, cmds, out, hdr):
           '    if (r.err) return 0;',
           '    switch (cmd) {']
     for c in ok:
-        m.append('    case VKB_CMD_%s: if (!f->%s) return 0; srv_%s(f, &r, &w); break;' % (c, c, c))
+        m.append('    case VKB_CMD_%s: if (!f->%s) { fprintf(stderr, "vkb_server: deferred function unavailable: %s\\n"); vkr_put_u32(&w, cmd); VkResult e_ = VK_ERROR_EXTENSION_NOT_PRESENT; vkr_put(&w, &e_, sizeof e_); break; } srv_%s(f, &r, &w); break;' % (c, c, c, c))
     m += ['    default: return 0;', '    }', '    return w.err ? 0 : w.off;', '}', '']
     open(os.path.join(out, 'vkb_rpc_server.c'), 'w').write('\n'.join(m))
 

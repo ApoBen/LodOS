@@ -78,17 +78,34 @@ for _ in $(seq 1 50); do grep -q 'listening' "$OUT/srv.log" 2>/dev/null && break
 grep -q 'listening' "$OUT/srv.log" || { cat "$OUT/srv.log"; exit 1; }
 
 echo "== start lodos-wl headless ${W}x${H} (dump after $DUMP_AFTER commits)"
-LODOS_WL_WIDTH=$W LODOS_WL_HEIGHT=$H LODOS_WL_DUMP="$OUT/fb.ppm" LODOS_WL_DUMP_AFTER=$DUMP_AFTER \
+RENDER_NODE=${LODOS_WL_DMABUF_DEV:-$(ls /dev/dri/renderD* 2>/dev/null | head -1 || true)}
+LODOS_WL_WIDTH=$W LODOS_WL_HEIGHT=$H LODOS_WL_DMABUF_DEV="$RENDER_NODE" \
+    LODOS_WL_DUMP="$OUT/fb.ppm" LODOS_WL_DUMP_AFTER=$DUMP_AFTER \
     "$WL" "$RUN/$WLSOCK" >"$OUT/lodos-wl.log" 2>&1 &
 wl_pid=$!
 for _ in $(seq 1 50); do [ -S "$RUN/$WLSOCK" ] && break; sleep 0.1; done
 [ -S "$RUN/$WLSOCK" ] || { cat "$OUT/lodos-wl.log" >&2; exit 1; }
 
+ZINK_WL_ENV=(
+    env -u DISPLAY -u WAYLAND_SOCKET -u LIBGL_ALWAYS_SOFTWARE
+    XDG_RUNTIME_DIR="$RUN" WAYLAND_DISPLAY="$WLSOCK"
+    MESA_LOADER_DRIVER_OVERRIDE=zink EGL_PLATFORM=wayland MESA_SHADER_CACHE_DIR="$OUT/cache" vblank_mode=0
+    VK_DRIVER_FILES="$OUT/lodos_icd.json" VK_ICD_FILENAMES="$OUT/lodos_icd.json" VK_LOADER_LAYERS_DISABLE='*'
+    LODOS_VK_SOCK="$SOCK"
+)
+
+renderer=""
+if command -v eglinfo >/dev/null 2>&1; then
+    echo "== verify Wayland EGL renderer via eglinfo -B -p wayland"
+    "${ZINK_WL_ENV[@]}" LODOS_VK_LOG_MISSING=0 eglinfo -B -p wayland >"$OUT/eglinfo.out" 2>"$OUT/eglinfo.err" || {
+        cat "$OUT/eglinfo.out"; cat "$OUT/eglinfo.err" >&2; exit 1;
+    }
+    renderer=$(sed -n 's/^OpenGL core profile renderer:[[:space:]]*//p' "$OUT/eglinfo.out" | head -1)
+    [ -n "$renderer" ] || renderer=$(sed -n 's/^OpenGL ES profile renderer:[[:space:]]*//p' "$OUT/eglinfo.out" | head -1)
+fi
+
 echo "== run $APP -info via zink -> lodos ICD (until $FRAMES presents)"
-env -u DISPLAY -u WAYLAND_SOCKET -u LIBGL_ALWAYS_SOFTWARE XDG_RUNTIME_DIR="$RUN" WAYLAND_DISPLAY=$WLSOCK \
-    MESA_LOADER_DRIVER_OVERRIDE=zink EGL_PLATFORM=wayland MESA_SHADER_CACHE_DIR="$OUT/cache" vblank_mode=0 \
-    VK_DRIVER_FILES="$OUT/lodos_icd.json" VK_ICD_FILENAMES="$OUT/lodos_icd.json" VK_LOADER_LAYERS_DISABLE='*' \
-    LODOS_VK_SOCK="$SOCK" LODOS_VK_WSI_STATS=1 LODOS_VK_WSI_STATS_EVERY=10 LODOS_VK_LOG_MISSING=1 \
+"${ZINK_WL_ENV[@]}" LODOS_VK_WSI_STATS=1 LODOS_VK_WSI_STATS_EVERY=10 LODOS_VK_LOG_MISSING=1 \
     timeout 300 "$APP" -info >"$OUT/app.out" 2>"$OUT/app.err" &
 app_pid=$!
 frames=0
@@ -99,16 +116,19 @@ for _ in $(seq 1 1200); do
     kill -0 "$app_pid" 2>/dev/null || break
     sleep 0.1
 done
-kill -INT "$app_pid" 2>/dev/null || true
+pkill -TERM -P "$app_pid" 2>/dev/null || true
+kill -TERM "$app_pid" 2>/dev/null || true
 wait "$app_pid" 2>/dev/null || true
 app_pid=""
 frames=$(sed -n 's/.*wsi presents=\([0-9][0-9]*\).*/\1/p' "$OUT/app.err" | tail -1)
 frames=${frames:-0}
-head -20 "$OUT/app.out"; grep -v 'wsi presents=' "$OUT/app.err" | sort | uniq -c | head -30 >&2
+head -20 "$OUT/app.out" || true
+{ grep -v 'wsi presents=' "$OUT/app.err" | sort | uniq -c | head -30 || true; } >&2
 echo "-- lodos-wl log"; tail -5 "$OUT/lodos-wl.log"
 [ "$frames" -ge "$FRAMES" ] || { echo "only $frames presents (< $FRAMES)" >&2; tail -20 "$OUT/srv.log" >&2; exit 1; }
 test -s "$OUT/fb.ppm" || { echo "no PPM dump (commits < $DUMP_AFTER?)" >&2; exit 1; }
-renderer=$(sed -n 's/^GL_RENDERER[[:space:]]*=[[:space:]]*//p' "$OUT/app.out" | head -1)
+app_renderer=$(sed -n 's/^GL_RENDERER[[:space:]]*=[[:space:]]*//p' "$OUT/app.out" | head -1)
+[ -n "$app_renderer" ] && renderer="$app_renderer"
 echo "GL_RENDERER = $renderer"
 case "$renderer" in *zink*) ;; *) echo "renderer is not zink" >&2; exit 1;; esac
 

@@ -47,9 +47,12 @@ use std::os::unix::net::UnixStream;
 
 use jni_sys::{jobject, jstring, JNIEnv};
 use smithay::{
-    backend::input::{ButtonState, KeyState, TouchSlot},
-    delegate_compositor, delegate_output, delegate_seat, delegate_shm, delegate_xdg_decoration,
-    delegate_xdg_shell,
+    backend::{
+        allocator::{dmabuf::Dmabuf, Format, Fourcc, Modifier},
+        input::{ButtonState, KeyState, TouchSlot},
+    },
+    delegate_compositor, delegate_dmabuf, delegate_output, delegate_seat, delegate_shm,
+    delegate_xdg_decoration, delegate_xdg_shell,
     input::{
         keyboard::{FilterResult, Keycode, XkbConfig},
         pointer::{ButtonEvent, MotionEvent as PointerMotionEvent},
@@ -81,6 +84,7 @@ use smithay::{
             self, BufferAssignment, CompositorClientState, CompositorHandler, CompositorState,
             SurfaceAttributes,
         },
+        dmabuf::{DmabufFeedbackBuilder, DmabufGlobal, DmabufHandler, DmabufState, ImportNotifier},
         output::{OutputHandler, OutputManagerState},
         shell::xdg::decoration::{XdgDecorationHandler, XdgDecorationState},
         shell::xdg::{
@@ -415,6 +419,7 @@ struct App {
     compositor_state: CompositorState,
     xdg_shell_state: XdgShellState,
     shm_state: ShmState,
+    dmabuf_state: DmabufState,
     seat_state: SeatState<App>,
     seat: Seat<App>,
     _output_state: OutputManagerState,
@@ -840,6 +845,17 @@ impl ShmHandler for App {
     }
 }
 
+impl DmabufHandler for App {
+    fn dmabuf_state(&mut self) -> &mut DmabufState {
+        &mut self.dmabuf_state
+    }
+    fn dmabuf_imported(&mut self, _global: &DmabufGlobal, _dmabuf: Dmabuf, notifier: ImportNotifier) {
+        // S1/T051: zwp_linux_dmabuf_v1 default feedback lets Mesa EGL select a render node for Zink Kopper,
+        // while Kopper presents via ICD guest WSI (wl_shm). Zero-copy dmabuf import comes in S2.
+        notifier.failed();
+    }
+}
+
 impl XdgShellHandler for App {
     fn xdg_shell_state(&mut self) -> &mut XdgShellState {
         &mut self.xdg_shell_state
@@ -964,6 +980,7 @@ impl XdgDecorationHandler for App {
 
 delegate_compositor!(App);
 delegate_shm!(App);
+delegate_dmabuf!(App);
 delegate_xdg_shell!(App);
 delegate_seat!(App);
 delegate_output!(App);
@@ -1023,6 +1040,30 @@ fn run_server_inner(args: ServerRunArgs) -> Result<(), Box<dyn std::error::Error
             &dh,
             vec![wl_shm::Format::Abgr8888, wl_shm::Format::Xbgr8888],
         );
+        let mut dmabuf_state = DmabufState::new();
+        #[cfg(unix)]
+        if let Ok(dev_path) = std::env::var("LODOS_WL_DMABUF_DEV") {
+            if !dev_path.is_empty() {
+                use std::os::unix::fs::MetadataExt;
+                match std::fs::metadata(&dev_path) {
+                    Ok(meta) if meta.rdev() != 0 => {
+                        let formats = vec![
+                            Format { code: Fourcc::Xrgb8888, modifier: Modifier::Linear },
+                            Format { code: Fourcc::Argb8888, modifier: Modifier::Linear },
+                        ];
+                        match DmabufFeedbackBuilder::new(meta.rdev() as libc::dev_t, formats).build() {
+                            Ok(fb) => {
+                                dmabuf_state.create_global_with_default_feedback::<App>(&dh, &fb);
+                                log_msg(&format!("lodos-wl: zwp_linux_dmabuf_v1 feedback dev={dev_path}"));
+                            }
+                            Err(e) => log_msg(&format!("lodos-wl: dmabuf feedback build failed: {e}")),
+                        }
+                    }
+                    Ok(_) => log_msg(&format!("lodos-wl: {dev_path} has rdev=0, skipping dmabuf")),
+                    Err(e) => log_msg(&format!("lodos-wl: stat {dev_path} failed: {e}")),
+                }
+            }
+        }
         let xdg_shell_state = XdgShellState::new::<App>(&dh);
         // xdg-decoration stub: always server-side (we draw none) so nested wlroots/GTK skip CSD.
         let xdg_decoration_state = XdgDecorationState::new::<App>(&dh);
@@ -1155,6 +1196,7 @@ fn run_server_inner(args: ServerRunArgs) -> Result<(), Box<dyn std::error::Error
             compositor_state,
             xdg_shell_state,
             shm_state,
+            dmabuf_state,
             seat_state,
             seat,
             _output_state: output_state,
