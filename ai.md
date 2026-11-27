@@ -41,7 +41,7 @@ D10 own repo of custom builds (mesa/zink, bridge, box64, fex, wine, dxvk)
 real systemd; flatpak/snap/docker/podman (no userns); kernel anticheat; VA-API hw decode; raw sockets/<1024 ports/vpn/kmods; direct usb/bt; 16K-page devices problematic (future)
 
 ## RISKS
-R1 mali vulkan bridge glibc<->bionic (boundary proven T019; remaining: full API surface/pNext/memory) | R2 mali lacks BCn etc -> transcode | R3 own wayland host (shm CPU path ok T022; zero-copy AHB/dmabuf pending) | R4 mutter can't nest in wayland -> headless+pipewire or patch | R5 fex under proot | R6 phantom process killer -> onboarding guide | R7 HyperOS blocks 1st adb install (guardprovider missing; manual 1st install worked) -> end users may hit MIUI restrictions | R8 app-uid: nativeLibDir exec + dma_heap ok (T017/T020) CLOSED | R10 proot rootfs+apt at app uid OK (T020) CLOSED; first-run extract slow 199s (T026) | R11 Mali DMA_BUF export broken (getMemoryFd fd=-1) -> export only via AHB; dma_heap ok at app uid | R12 vk-layer ICD handles (loader magic) -> bridge must use vk_icdGetInstanceProcAddr; libcutils non-NDK (T014) | R13 shell uid can't bind path AF_UNIX (SELinux); app uid OK (T017) -> abstract/unix2abstract only for adb spikes | R17 bridge mapped mem = memfd shadow + memcpy sync on flush/submit/wait (T029) -> perf cost for big buffers; later AHB-backed zero-copy | R14 ring spin vs futex: short spin -> 100x latency; need adaptive spin/per-thread tuning (power) | R15 proot cgroup2 ro -> elogind no sessions/polkit (T025) | R16 phone adb drops on PC suspend/resume -> phone tasks stall | R9 lxc rootfs URLs rotate ~3d -> fetch script resolves latest; pin own mirror for release
+R1 mali vulkan bridge glibc<->bionic (boundary proven T019; remaining: full API surface/pNext/memory) | R2 mali lacks BCn etc -> transcode | R3 own wayland host (shm CPU path ok T022; zero-copy AHB/dmabuf pending) | R4 mutter can't nest in wayland -> headless+pipewire or patch | R5 fex under proot | R6 phantom process killer -> onboarding guide | R7 HyperOS blocks 1st adb install (guardprovider missing; manual 1st install worked) -> end users may hit MIUI restrictions | R8 app-uid: nativeLibDir exec + dma_heap ok (T017/T020) CLOSED | R10 proot rootfs+apt at app uid OK (T020) CLOSED; first-run extract slow 199s (T026) | R11 Mali DMA_BUF export broken (getMemoryFd fd=-1) -> export only via AHB; dma_heap ok at app uid | R12 vk-layer ICD handles (loader magic) -> bridge must use vk_icdGetInstanceProcAddr; libcutils non-NDK (T014) | R13 shell uid can't bind path AF_UNIX (SELinux); app uid OK (T017) -> abstract/unix2abstract only for adb spikes | R17 bridge mapped mem = memfd shadow + memcpy sync on flush/submit/wait (T029) -> perf cost for big buffers; later AHB-backed zero-copy | R14 ring spin vs futex: short spin -> 100x latency; need adaptive spin/per-thread tuning (power) | R15 proot cgroup2 ro -> elogind no sessions/polkit (T025) | R18 lodos-init built bionic-only; guest (glibc proot) needs gnu/musl target before use | R16 phone adb drops on PC suspend/resume -> phone tasks stall | R9 lxc rootfs URLs rotate ~3d -> fetch script resolves latest; pin own mirror for release
 
 ## PHASES
 P0 spikes: S1 mali bridge vkcube+zink glxgears | S2 wayland host+nested phoc+zero-copy | S3 phosh/gnome48 w/ elogind+mini-init (+test systemd --user standalone) | S4 box64+wine arm64ec in proot, Hades
@@ -83,16 +83,18 @@ P5 generalize + github + CI
 [ ] T028 S2 v1: app-uid proot guest wl_shm client (weston-simple-shm) -> DisplayActivity (neon)
 [x] T029 S1 ICD 92 cmds, memfd-shadow mapped mem, PC-host compute e2e via ICD on Intel Arc OK
 [x] T030 P1 wizard skeleton: SetupStateMachine+RootfsInstaller(fake repo)+SetupActivity, 11 JVM tests
-[ ] T031 D3 Rust lodos-init + systemctl shim, cargo tests (neon, no phone)
-[ ] T032 S1 PC-host offscreen triangle via ICD (graphics path; carbon, no phone)
+[x] T031 D3 native/lodos-init (init+systemctl shim, 14 cargo tests); bionic build only -> guest needs musl/gnu target
+[x] T032 S1 ICD 135 cmds, PC-host offscreen triangle via ICD on Intel OK (gaps: void* ptrs, WSI/AHB fd cmds, batching)
 [ ] T033 P1 Rust rootfs extractor crate + JNI .so, host tests (neon, no phone; T026 wires on phone)
 [ ] T034 S2 lodos-wl headless x86_64 backend + wayland-client tests (neon, no phone)
+[ ] T035 S1 PC-host zink (system mesa) over ICD, surfaceless EGL triangle (carbon, no phone)
 (live status: task files frontmatter)
 
 ## OPEN (need user)
-- phone <phone-serial> not on adb (USB lost after PC resume) -> replug/allow USB debugging; T024-T028 wait on it
+(none)
 
 ## LOG (newest first, 1 line each)
+2026-11-27 review14: T031,T032 ok (accept PASS: 14 cargo tests; Intel triangle via ICD 110 calls); phone back on adb -> T024-T028 runnable; +T035 zink over ICD
 2026-11-27 review13: T029,T030 ok (accept PASS: Intel compute via ICD, 11 JVM tests); phone still off adb; +T032 host triangle, T033 rootfs extractor, T034 wl headless (PC-only)
 2026-11-27 review12: T024 a1 fail (phone disconnected, not quality) -> REVIEW hint, max4; all phone tasks stalled -> +T029 vk host compute, T030 wizard, T031 lodos-init (PC-only)
 2026-11-27 review11: T022,T023 ok (carbon, accept PASS: green pixels, guest vulkaninfo Mali); untracked __pycache__; +T027 vk work, T028 guest display
