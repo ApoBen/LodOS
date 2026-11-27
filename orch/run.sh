@@ -3,7 +3,7 @@
 set -u
 R=/mnt/SSD/LodOS; O=$R/orch; T=$O/tasks; S=$O/state; L=$O/logs
 AGY=$HOME/.gemini/bin/agy
-PHONE=<phone-serial>
+PHONE=${ANDROID_SERIAL:-}
 REVIEW_EVERY=${REVIEW_EVERY:-2}
 mkdir -p "$S" "$L"
 exec 9>"$S/lock"; flock -n 9 || { echo "runner already running"; exit 0; }
@@ -13,9 +13,9 @@ cd "$R" || exit 1
 log(){ echo "$(date '+%F %T') $*" | tee -a "$L/runner.log"; }
 field(){ sed -n "s/^$2: *//p" "$1" | head -1; }
 setf(){ sed -i "0,/^$2:.*/s//$2: $3/" "$1"; }
-phone_ok(){ adb -s "$PHONE" get-state 2>/dev/null | grep -q device; }
+phone_ok(){ adb get-state 2>/dev/null | grep -q device; }
 checklist(){ bash "$O/checklist.sh" >/dev/null 2>&1; }
-commit(){ ( flock 8; git add -A >/dev/null 2>&1; git commit -qm "$1" >/dev/null 2>&1 || true ) 8>"$S/git.lock"; }
+commit(){ ( flock 8; git add -A >/dev/null 2>&1; local o; o=$(git commit -qm "$1" 2>&1) || { echo "$o" | grep -q 'pre-commit' && { log "COMMIT BLOCKED ($1): $(echo "$o" | head -2 | tr '\n' ' ')"; notify-send -u critical -a LodOS "LodOS: commit engellendi" "Kişisel/gizli veri bulundu, bkz runner.log" 2>/dev/null; }; }; true ) 8>"$S/git.lock"; }
 
 deps_done(){ # $1 task file
   local d; for d in $(field "$1" deps | tr ',' ' '); do

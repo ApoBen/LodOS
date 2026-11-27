@@ -4,7 +4,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 source orch/env.sh
 
-SERIAL=${SERIAL:-<phone-serial>}
+SERIAL=${SERIAL:-${ANDROID_SERIAL:-$(adb get-serialno 2>/dev/null)}}
 export ANDROID_SERIAL="$SERIAL"
 A="adb -s $SERIAL"
 PKG=org.lodos.app
@@ -30,7 +30,13 @@ fi
 $A shell am force-stop "$PKG" || true
 $A logcat -c
 $A shell am start -W -n "$PKG/.DisplayActivity" --es client guest
-sleep 15
+# First run may apt-install Weston in the app's private rootfs. Wait for repeated
+# native presentations, or for the guest process to finish, before capturing.
+for _ in $(seq 1 180); do
+  seen=$($A logcat -d -s LODOS_WL | sed -nE 's/.*present #([0-9]+).*/\1/p' | sort -n | tail -1)
+  if [ "${seen:-0}" -ge 2 ]; then break; fi
+  sleep 2
+done
 rm -f "$PNG"
 $A exec-out screencap -p > "$PNG"
 $A logcat -d -s LODOS_DISPLAY LODOS_WL

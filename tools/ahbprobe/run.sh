@@ -3,7 +3,7 @@
 set -e
 cd "$(dirname "$0")"
 . ../../orch/env.sh
-S=${ADB_SERIAL:-<phone-serial>}
+S=${ADB_SERIAL:-${ANDROID_SERIAL:-$(adb get-serialno 2>/dev/null)}}
 adb -s $S shell mkdir -p /data/local/tmp/lodos
 adb -s $S push ahbprobe /data/local/tmp/lodos/ahbprobe
 adb -s $S shell "chmod 755 /data/local/tmp/lodos/ahbprobe && /data/local/tmp/lodos/ahbprobe /data/local/tmp/lodos/ahbprobe.json"

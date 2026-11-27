@@ -5,7 +5,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 source orch/env.sh
-SERIAL=${SERIAL:-<phone-serial>}
+SERIAL=${SERIAL:-${ANDROID_SERIAL:-$(adb get-serialno 2>/dev/null)}}
 L=/data/local/tmp/lodos
 RUN=$L/run
 A="adb -s $SERIAL"

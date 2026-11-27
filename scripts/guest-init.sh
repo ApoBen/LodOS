@@ -10,7 +10,7 @@ source orch/env.sh
 
 R="bash scripts/phone-run.sh"
 L=/data/local/tmp/lodos
-SERIAL=${SERIAL:-<phone-serial>}
+SERIAL=${SERIAL:-${ANDROID_SERIAL:-$(adb get-serialno 2>/dev/null)}}
 LOG=${LOG:-/tmp/lodos-guest-init.log}
 : > "$LOG"
 

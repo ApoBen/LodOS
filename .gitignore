@@ -13,3 +13,7 @@ local.properties
 native/*/target/
 __pycache__/
 *.pyc
+
+# machine/user-specific, never commit
+orch/local/
+lodosai.md

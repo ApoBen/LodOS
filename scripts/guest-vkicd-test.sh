@@ -9,7 +9,7 @@ cd "$(dirname "$0")/.."
 ROOT=$PWD
 source orch/env.sh
 
-SERIAL=${SERIAL:-<phone-serial>}
+SERIAL=${SERIAL:-${ANDROID_SERIAL:-$(adb get-serialno 2>/dev/null)}}
 LODOS_VK_SOCK=${LODOS_VK_SOCK:-@lodos-vk-g}
 SRC=$ROOT/native/vk-bridge
 VKH=$ROOT/third_party/src/Vulkan-Headers

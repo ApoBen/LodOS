@@ -4,7 +4,7 @@ set -euo pipefail
 ROOT=$(cd "$(dirname "$0")/../.." && pwd)
 SRC="$ROOT/native/vk-bridge"
 OUT="$ROOT/build/vk-bridge/transport"
-SERIAL=${SERIAL:-<phone-serial>}
+SERIAL=${SERIAL:-${ANDROID_SERIAL:-$(adb get-serialno 2>/dev/null)}}
 PDIR=/data/local/tmp/lodos
 mkdir -p "$OUT"
 FILES=("$SRC/transport/ring.c" "$SRC/transport/sock.c" "$SRC/test/transport_test.c")

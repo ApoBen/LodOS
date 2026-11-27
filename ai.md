@@ -16,7 +16,7 @@ single APK, rootless, NO termux, NO termux-x11. Full Linux on Android: GPU accel
 
 ## ENV
 pc: arch-based linux, 133G free on /mnt/SSD | sdk:~/development/android (platforms 33-36, build-tools 30/34/35, ndk 23.1 ONLY -> need newer ndk r27+) | jdk17
-phone(P1): POCO X7 Pro "rodin" 2412DPC0AG, adb serial <phone-serial> usb, Dimensity8400 (8x A725, no LITTLE), Mali-G720, 12G, HyperOS, 4K pages, no root
+phone(P1): POCO X7 Pro "rodin" 2412DPC0AG, adb serial in orch/local/env (not committed), Dimensity8400 (8x A725, no LITTLE), Mali-G720, 12G, HyperOS, 4K pages, no root
 tablet(P2): Tab S9 Ultra, SD8G2/Adreno740, no root
 
 ## DECISIONS (D#)

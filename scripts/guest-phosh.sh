@@ -10,7 +10,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 R="bash scripts/phone-run.sh"
 L=/data/local/tmp/lodos
-SERIAL=${SERIAL:-<phone-serial>}
+SERIAL=${SERIAL:-${ANDROID_SERIAL:-$(adb get-serialno 2>/dev/null)}}
 LOG=${LOG:-/tmp/lodos-guest-phosh.log}
 # gnome-settings-daemon-common: schemas phosh aborts without (peripherals.touchscreen); wayland-utils: probe
 PKGS="phosh phoc squeekboard gnome-session-bin dbus-user-session gnome-settings-daemon-common wayland-utils"

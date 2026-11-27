@@ -33,6 +33,8 @@ object GuestLaunch {
     const val PROOT = "libproot.so"
     const val LOADER = "libproot_loader.so"
     const val GUEST_RUN = "/run/lodos"
+    const val GUEST_AUDIO_SOCKET = "$GUEST_RUN/audio.sock"
+    const val GUEST_PULSE_SOCKET = "$GUEST_RUN/pulse/native.sock"
     const val LODOS_INIT = "/sbin/lodos-init"
     const val GUEST_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 
@@ -65,6 +67,7 @@ object GuestLaunch {
             "LANG" to "C.UTF-8",
             "XDG_RUNTIME_DIR" to GUEST_RUN,
             "WAYLAND_DISPLAY" to spec.waylandDisplay,
+            "PULSE_SERVER" to "unix:$GUEST_PULSE_SOCKET",
         )
         spec.lite?.let { e.putAll(LiteMode.toGuestEnv(it)) }
         if (spec.lite != null) e["LODOS_GSETTINGS_OVERRIDE"] = "$GUEST_SCHEMA_DIR/99-lodos.gschema.override"

@@ -17,6 +17,8 @@ typedef struct {
     size_t map_len;
 } vkbc_map;
 
+typedef struct { uint64_t cmdbuf; uint8_t *data; size_t len, cap; } vkbc_batch;
+
 struct vkbc {
     int sock;
     ring c2s, s2c;
@@ -24,7 +26,66 @@ struct vkbc {
     uint32_t req_cap, rep_cap;
     vkbc_map *maps;
     uint32_t nmaps, capmaps;
+    vkbc_batch *batches;
+    uint32_t nbatches, capbatches;
+    int batch_enabled;
 };
+
+static vkbc_batch *batch_get(vkbc *c, uint64_t cmdbuf, int create) {
+    for (uint32_t i = 0; i < c->nbatches; i++) if (c->batches[i].cmdbuf == cmdbuf) return &c->batches[i];
+    if (!create) return NULL;
+    if (c->nbatches == c->capbatches) {
+        uint32_t nc = c->capbatches ? c->capbatches * 2 : 8;
+        vkbc_batch *p = realloc(c->batches, (size_t)nc * sizeof(*p));
+        if (!p) return NULL;
+        c->batches = p; c->capbatches = nc;
+    }
+    vkbc_batch *b = &c->batches[c->nbatches++];
+    *b = (vkbc_batch){ .cmdbuf = cmdbuf };
+    return b;
+}
+
+int vkbc__batch_active(vkbc *c) { return c && c->batch_enabled; }
+void vkbc__batch_reset(vkbc *c, uint64_t cmdbuf) {
+    if (!c) return;
+    vkbc_batch *b = batch_get(c, cmdbuf, 1);
+    if (b) b->len = 0;
+}
+int vkbc__batch_append(vkbc *c, uint64_t cmdbuf, const uint8_t *p, size_t n) {
+    if (!c || !p || n > UINT32_MAX) return -EINVAL;
+    vkbc_batch *b = batch_get(c, cmdbuf, 1);
+    if (!b || n > SIZE_MAX - b->len - 4) return -ENOMEM;
+    size_t need = b->len + 4 + n;
+    if (need > b->cap) {
+        size_t nc = b->cap ? b->cap : 4096;
+        while (nc < need) { if (nc > SIZE_MAX / 2) { nc = need; break; } nc *= 2; }
+        uint8_t *q = realloc(b->data, nc);
+        if (!q) return -ENOMEM;
+        b->data = q; b->cap = nc;
+    }
+    uint32_t z = (uint32_t)n;
+    memcpy(b->data + b->len, &z, 4);
+    memcpy(b->data + b->len + 4, p, n);
+    b->len = need;
+    return 0;
+}
+VkResult vkbc__batch_flush(vkbc *c, uint64_t cmdbuf) {
+    if (!c) return VK_ERROR_DEVICE_LOST;
+    vkbc_batch *b = batch_get(c, cmdbuf, 0);
+    size_t n = b ? b->len : 0;
+    if (n > UINT32_MAX || n + 8 > c->req_cap) return VK_ERROR_OUT_OF_HOST_MEMORY;
+    uint8_t *p = c->req; uint32_t cmd = VKB_CMD_STREAM, sz = (uint32_t)n;
+    memcpy(p, &cmd, 4); memcpy(p + 4, &sz, 4);
+    if (n) memcpy(p + 8, b->data, n);
+    const uint8_t *rep; size_t replen;
+    if (vkbc__call(c, n + 8, &rep, &replen) < 0) return VK_ERROR_DEVICE_LOST;
+    vkr_rd r = { rep, replen, 0, 0, NULL, NULL };
+    if (vkr_get_u32(&r) != VKB_CMD_STREAM) return VK_ERROR_UNKNOWN;
+    VkResult res; vkr_get(&r, &res, sizeof res);
+    if (r.err) return VK_ERROR_UNKNOWN;
+    if (b) b->len = 0;
+    return res;
+}
 
 void vkbc__drop_map(vkbc *c, uint64_t dev, uint64_t mem) {
     if (!c) return;
@@ -162,6 +223,8 @@ vkbc *vkbc_connect(const char *name) {
     c->rep_cap = ring_max_msg(&c->s2c);
     c->req = malloc(c->req_cap);
     c->rep = malloc(c->rep_cap);
+    const char *no_batch = getenv("VKB_NO_BATCH");
+    c->batch_enabled = !(no_batch && no_batch[0] == '1');
     if (!c->req || !c->rep) { errno = ENOMEM; goto fail; }
     return c;
 fail:;
@@ -176,6 +239,8 @@ void vkbc_disconnect(vkbc *c) {
     for (uint32_t i = 0; i < c->nmaps; i++)
         if (c->maps[i].ptr) munmap(c->maps[i].ptr, c->maps[i].map_len);
     free(c->maps);
+    for (uint32_t i = 0; i < c->nbatches; i++) free(c->batches[i].data);
+    free(c->batches);
     if (c->c2s.h && c->req) {
         uint32_t bye = VKR_CMD_BYE;
         ring_push(&c->c2s, &bye, 4);

@@ -317,6 +317,10 @@ def emit(reg, Gen, Unsupported, cmds, out, hdr):
           'uint8_t *vkbc__buf(vkbc *c, size_t *cap);',
           '/* send req (in vkbc__buf), wait reply; returns 0 or -errno */',
           'int vkbc__call(vkbc *c, size_t len, const uint8_t **rep, size_t *replen);',
+          'int vkbc__batch_active(vkbc *c);',
+          'int vkbc__batch_append(vkbc *c, uint64_t cmdbuf, const uint8_t *p, size_t n);',
+          'void vkbc__batch_reset(vkbc *c, uint64_t cmdbuf);',
+          'VkResult vkbc__batch_flush(vkbc *c, uint64_t cmdbuf);',
           '/* drop local shm mapping(s) on unmap/free/destroy (mem==0 drops all on dev) */',
           'void vkbc__drop_map(vkbc *c, uint64_t dev, uint64_t mem);',
           '/* client API: same params as Vulkan, prefixed with vkbc *. void cmds return VK_SUCCESS/bridge error */']
@@ -654,6 +658,19 @@ def emit(reg, Gen, Unsupported, cmds, out, hdr):
                           '            vkr_pnext_req(w, %s[%s].pNext);' % (p.name, i)]
                 m.append('    }')
         m += ['    if (w->err) return %s;' % err_r('VK_ERROR_OUT_OF_HOST_MEMORY'),
+              ]
+        is_cmd = (c.startswith('vkCmd') or c == 'vkEndCommandBuffer') and ps and ps[0].base == 'VkCommandBuffer'
+        is_begin = c == 'vkBeginCommandBuffer'
+        if is_cmd:
+            m += ['    if (vkbc__batch_active(c)) {',
+                  '        int br_ = vkbc__batch_append(c, (uint64_t)(uintptr_t)%s, buf, w->off);' % ps[0].name,
+                  '        if (br_ < 0) return VK_ERROR_OUT_OF_HOST_MEMORY;']
+            if c == 'vkEndCommandBuffer':
+                m += ['        return vkbc__batch_flush(c, (uint64_t)(uintptr_t)%s);' % ps[0].name]
+            else:
+                m += ['        return VK_SUCCESS;']
+            m += ['    }']
+        m += [
               '    const uint8_t *rep; size_t replen;',
               '    if (vkbc__call(c, w->off, &rep, &replen) < 0) return %s;' % err_r('VK_ERROR_DEVICE_LOST'),
               '    vkr_rd r_ = { rep, replen, 0, 0, NULL, NULL }, *r = &r_;',
@@ -703,6 +720,8 @@ def emit(reg, Gen, Unsupported, cmds, out, hdr):
                 m.append('    vkbc__drop_map(c, (uint64_t)(uintptr_t)device, (uint64_t)(uintptr_t)memory);')
             elif c == 'vkDestroyDevice':
                 m.append('    vkbc__drop_map(c, (uint64_t)(uintptr_t)device, 0);')
+            if is_begin:
+                m.append('    if (res >= 0 && vkbc__batch_active(c)) vkbc__batch_reset(c, (uint64_t)(uintptr_t)commandBuffer);')
             m += ['    return res;', '}', '']
     open(os.path.join(out, 'vkb_rpc_client.c'), 'w').write('\n'.join(m))
 
@@ -842,6 +861,22 @@ def emit(reg, Gen, Unsupported, cmds, out, hdr):
           '    uint32_t cmd = vkr_get_u32(&r);',
           '    if (r.err) return 0;',
           '    switch (cmd) {']
+    m += ['    case VKB_CMD_STREAM: {',
+          '        uint32_t n_ = vkr_get_u32(&r);',
+          '        if (r.err || n_ != vkr_left(&r)) break;',
+          '        while (vkr_left(&r) && !r.err) {',
+          '            uint32_t z_ = vkr_get_u32(&r);',
+          '            if (r.err || z_ < 4 || z_ > vkr_left(&r)) { vkr_fail(&r.err, VKR_E_BOUNDS); break; }',
+          '            uint8_t tmp_[16]; size_t tl_;',
+          '            a->used = 0;',
+          '            tl_ = vkr_srv_dispatch(f, hctx, a, r.p + r.off, z_, tmp_, sizeof tmp_);',
+          '            r.off += z_;',
+          '            if (!tl_ || tl_ < 8) { vkr_fail(&r.err, VKR_E_CMD); break; }',
+          '            VkResult sr_; memcpy(&sr_, tmp_ + 4, sizeof sr_);',
+          '            if (sr_ < 0) { vkr_fail(&r.err, VKR_E_CMD); break; }',
+          '        }',
+          '        vkr_put_u32(&w, cmd); VkResult sr_ = r.err ? VK_ERROR_UNKNOWN : VK_SUCCESS; vkr_put(&w, &sr_, sizeof sr_);',
+          '        break;', '    }']
     for c in ok:
         m.append('    case VKB_CMD_%s: if (!f->%s) { fprintf(stderr, "vkb_server: deferred function unavailable: %s\\n"); vkr_put_u32(&w, cmd); VkResult e_ = VK_ERROR_EXTENSION_NOT_PRESENT; vkr_put(&w, &e_, sizeof e_); break; } srv_%s(f, &r, &w); break;' % (c, c, c, c))
     m += ['    default: return 0;', '    }', '    return w.err ? 0 : w.off;', '}', '']

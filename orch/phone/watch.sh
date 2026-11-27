@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # PC side: while lodos.service is active and phone is attached, keep keeper.sh running on phone and refresh the work flag.
-D="adb -s <phone-serial>"; K=/mnt/SSD/LodOS/orch/phone/keeper.sh
+D="adb"; K=/mnt/SSD/LodOS/orch/phone/keeper.sh
 quota_notify(){ # $1=name $2=state file $3=OFF file
   local f=/mnt/SSD/LodOS/orch/state/$2 n=/mnt/SSD/LodOS/orch/state/$2.notified
   if [ -f "$f" ] && [ ! -f "/mnt/SSD/LodOS/orch/$3" ] && [ "$(cat "$f")" != "$(cat "$n" 2>/dev/null)" ] && [ "$(date +%s)" -lt "$(cat "$f")" ]; then

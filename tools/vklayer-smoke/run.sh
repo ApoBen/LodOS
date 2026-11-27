@@ -4,7 +4,7 @@ set -euo pipefail
 ROOT=$(cd "$(dirname "$0")/../.." && pwd)
 cd "$ROOT"
 source orch/env.sh
-SER=${ANDROID_SERIAL:-<phone-serial>}
+SER=${ANDROID_SERIAL:-${ANDROID_SERIAL:-$(adb get-serialno 2>/dev/null)}}
 LIB=build/vk-layer/arm64/libvulkan_lodos_mali.so
 OUT=build/vk-layer/arm64/vklayer-smoke
 D=/data/local/tmp/lodos/vk

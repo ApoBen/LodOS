@@ -1,6 +1,6 @@
 # S4 v0: box64 in Debian trixie proot guest (shell uid) — T024
 
-Device: POCO X7 Pro (`<phone-serial>`, Dimensity 8400, 8x Cortex-A725, 4K pages, Android 15 kernel 6.6.118).
+Device: POCO X7 Pro (Dimensity 8400, 8x Cortex-A725, 4K pages, Android 15 kernel 6.6.118).
 Guest: Debian 13.7 (`trixie` arm64) via `scripts/phone-run.sh` (`proot -0`, shell uid).
 Script: `scripts/guest-box64.sh` (idempotent; verified end-to-end).
 

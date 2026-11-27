@@ -71,6 +71,23 @@ android {
     }
 }
 
+// The audio daemon is an executable stored in jniLibs so Android extracts it to nativeLibraryDir.
+val stageAudioDaemon by tasks.registering(Exec::class) {
+    val root = rootProject.projectDir.parentFile
+    workingDir(root)
+    commandLine("bash", "scripts/build-rs.sh", "native/lodos-audio", "--features", "android")
+    doLast {
+        val source = root.resolve("build/rs/arm64/lodos-audio")
+        check(source.isFile) { "lodos-audio build did not produce $source" }
+        val destination = project.file("src/main/jniLibs/arm64-v8a/liblodos_audio.so")
+        destination.parentFile.mkdirs()
+        source.copyTo(destination, overwrite = true)
+        destination.setExecutable(true, false)
+    }
+}
+
+tasks.named("preBuild").configure { dependsOn(stageAudioDaemon) }
+
 dependencies {
     testImplementation("junit:junit:4.13.2")
 }

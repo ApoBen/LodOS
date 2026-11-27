@@ -1,6 +1,6 @@
 # S3 probe: phosh/phoc in Debian trixie guest (proot, shell uid) — T016
 
-Device: POCO X7 Pro (<phone-serial>), guest Debian 13.7 via scripts/phone-run.sh (proot -0, shell uid).
+Device: POCO X7 Pro, guest Debian 13.7 via scripts/phone-run.sh (proot -0, shell uid).
 Script: `scripts/guest-phosh.sh` (idempotent; log /tmp/lodos-guest-phosh.log on host).
 
 ## Install

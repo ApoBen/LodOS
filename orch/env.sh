@@ -1,5 +1,7 @@
 # LodOS Android native toolchain environment
-export ANDROID_HOME="$HOME/development/android"
+export ANDROID_HOME="${ANDROID_HOME:-$HOME/development/android}"
+# machine-specific values (ANDROID_SERIAL ...), not committed
+_lodos_local="$(dirname "${BASH_SOURCE[0]}")/local/env"; [ -f "$_lodos_local" ] && source "$_lodos_local"
 export ANDROID_SDK_ROOT="$ANDROID_HOME"
 export ANDROID_NDK="$ANDROID_HOME/ndk/30.0.16248370"
 export ANDROID_NDK_HOME="$ANDROID_NDK"

@@ -4,7 +4,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 source orch/env.sh
-SERIAL=${SERIAL:-<phone-serial>}
+SERIAL=${SERIAL:-${ANDROID_SERIAL:-$(adb get-serialno 2>/dev/null)}}
 A="adb -s $SERIAL"
 PKG=org.lodos.app
 APK=android/app/build/outputs/apk/debug/app-debug.apk

@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+# Blocks commits that add personal/secret data. Patterns that are personal live in orch/local/ (not committed).
+root=$(git rev-parse --show-toplevel)
+pats=('ghp_[A-Za-z0-9]{36}' 'github_pat_[A-Za-z0-9_]{40,}' 'gho_[A-Za-z0-9]{36}' 'sk-[A-Za-z0-9_-]{32,}' 'AIza[0-9A-Za-z_-]{35}' 'xox[baprs]-[0-9A-Za-z-]{10,}' 'BEGIN [A-Z ]*PRIVATE KEY' "/home/$USER/")
+[ -n "${ANDROID_SERIAL:-}" ] && pats+=("$ANDROID_SERIAL")
+[ -f "$root/orch/local/env" ] && s=$(sed -n 's/^export ANDROID_SERIAL=//p' "$root/orch/local/env") && [ -n "$s" ] && pats+=("$s")
+[ -f "$root/orch/local/forbidden" ] && while IFS= read -r l; do [ -n "$l" ] && pats+=("$l"); done < "$root/orch/local/forbidden"
+e=$(git config user.email); case "$e" in *users.noreply.github.com) ;; *) echo "pre-commit: user.email must be the GitHub noreply address"; exit 1;; esac
+bad=0
+for p in "${pats[@]}"; do
+  hits=$(git diff --cached -U0 --no-color -- . ':(exclude)android/app/src/test/**' ':(exclude).githooks/**' | grep -E '^\+[^+]' | grep -nE -- "$p")
+  [ -n "$hits" ] && { echo "pre-commit: blocked pattern '$p':"; echo "$hits" | head -5; bad=1; }
+done
+git diff --cached --name-only --diff-filter=ACMR | grep -qxE 'lodosai\.md|orch/local/.*' && { echo "pre-commit: private file staged"; bad=1; }
+exit $bad

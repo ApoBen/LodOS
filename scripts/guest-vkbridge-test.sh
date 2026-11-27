@@ -8,7 +8,7 @@ export PYTHONDONTWRITEBYTECODE=1
 cd "$(dirname "$0")/.."
 ROOT=$PWD
 source orch/env.sh
-SERIAL=${SERIAL:-<phone-serial>}
+SERIAL=${SERIAL:-${ANDROID_SERIAL:-$(adb get-serialno 2>/dev/null)}}
 SRC=$ROOT/native/vk-bridge
 VKH=$ROOT/third_party/src/Vulkan-Headers
 [ -f "$VKH/registry/vk.xml" ] || git clone -q --depth 1 --branch v1.4.369 https://github.com/KhronosGroup/Vulkan-Headers "$VKH"

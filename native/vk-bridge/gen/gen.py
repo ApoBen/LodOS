@@ -579,7 +579,7 @@ def main():
     h = [hdr, '#ifndef VKB_CMDS_H', '#define VKB_CMDS_H', '', 'enum vkb_cmd {', '    VKB_CMD_INVALID = 0,']
     for c in cmds:
         h.append('    VKB_CMD_%s,%s' % (c, '' if c in ok else ' /* stub: %s */' % bad[c]))
-    h += ['    VKB_CMD_COUNT', '};', '']
+    h += ['    VKB_CMD_COUNT', '};', '#define VKB_CMD_STREAM VKB_CMD_COUNT', '']
     for c in cmds:
         h.append('#define VKB_CMD_HAS_%s 1' % c)
     h += ['', 'static const char *const vkb_cmd_names[VKB_CMD_COUNT] = {', '    "INVALID",']

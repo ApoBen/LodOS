@@ -89,31 +89,34 @@ cleanup() {
 }
 trap cleanup EXIT
 
-echo "== start vkb_server (VK_DRIVER_FILES=$HOST_ICD, LODOS_VK_SOCK=$SOCK)"
-VK_DRIVER_FILES="$HOST_ICD" LODOS_VK_SOCK="$SOCK" "$OUT/vkb_server" >"$OUT/srv.log" 2>&1 &
-srv_pid=$!
+run_mode() {
+    mode=$1; no_batch=$2
+    echo "== start vkb_server ($mode, VK_DRIVER_FILES=$HOST_ICD, LODOS_VK_SOCK=$SOCK)" >&2
+    VK_DRIVER_FILES="$HOST_ICD" LODOS_VK_SOCK="$SOCK" "$OUT/vkb_server" >"$OUT/srv-$mode.log" 2>&1 &
+    srv_pid=$!
+    for _ in $(seq 1 50); do
+        grep -q 'listening' "$OUT/srv-$mode.log" 2>/dev/null && break
+        sleep 0.05
+    done
+    grep -q 'listening' "$OUT/srv-$mode.log" || { cat "$OUT/srv-$mode.log"; exit 1; }
+    cli_out=$(VKB_NO_BATCH="$no_batch" VK_DRIVER_FILES="$OUT/lodos_icd.json" LODOS_VK_SOCK="$SOCK" "$OUT/host_triangle" "$OUT/out.ppm")
+    echo "$cli_out" >&2
+    for _ in $(seq 1 40); do
+        grep -q 'client done,' "$OUT/srv-$mode.log" 2>/dev/null && break
+        sleep 0.05
+    done
+    kill "$srv_pid" 2>/dev/null || true
+    wait "$srv_pid" 2>/dev/null || true
+    srv_pid=""
+    test -s "$OUT/out.ppm" || { echo "missing or empty $OUT/out.ppm"; exit 1; }
+    center=$(printf '%s\n' "$cli_out" | sed -n 's/.*center=\([^ ]*\).*/\1/p')
+    corner=$(printf '%s\n' "$cli_out" | sed -n 's/.*corner=\([^ ]*\).*/\1/p')
+    calls=$(sed -n 's/.*client done, \([0-9][0-9]*\) calls.*/\1/p' "$OUT/srv-$mode.log" | tail -1)
+    [ -n "$center" ] && [ -n "$corner" ] && [ -n "$calls" ] || { cat "$OUT/srv-$mode.log"; echo "missing center/corner/calls"; exit 1; }
+    echo "VKB host triangle ok center=$center corner=$corner calls=$calls" >&2
+    printf '%s' "$calls"
+}
 
-for _ in $(seq 1 50); do
-    grep -q 'listening' "$OUT/srv.log" 2>/dev/null && break
-    sleep 0.05
-done
-grep -q 'listening' "$OUT/srv.log" || { cat "$OUT/srv.log"; exit 1; }
-
-echo "== run host_triangle (VK_DRIVER_FILES=$OUT/lodos_icd.json, LODOS_VK_SOCK=$SOCK)"
-cli_out=$(VK_DRIVER_FILES="$OUT/lodos_icd.json" LODOS_VK_SOCK="$SOCK" "$OUT/host_triangle" "$OUT/out.ppm")
-echo "$cli_out"
-
-for _ in $(seq 1 40); do
-    grep -q 'client done,' "$OUT/srv.log" 2>/dev/null && break
-    sleep 0.05
-done
-
-echo "-- server log"
-cat "$OUT/srv.log"
-
-test -s "$OUT/out.ppm" || { echo "missing or empty $OUT/out.ppm"; exit 1; }
-center=$(printf '%s\n' "$cli_out" | sed -n 's/.*center=\([^ ]*\).*/\1/p')
-corner=$(printf '%s\n' "$cli_out" | sed -n 's/.*corner=\([^ ]*\).*/\1/p')
-calls=$(sed -n 's/.*client done, \([0-9][0-9]*\) calls.*/\1/p' "$OUT/srv.log" | tail -1)
-[ -n "$center" ] && [ -n "$corner" ] && [ -n "$calls" ] || { echo "missing center/corner/calls"; exit 1; }
-echo "VKB host triangle ok center=$center corner=$corner calls=$calls"
+batched=$(run_mode batched 0)
+unbatched=$(run_mode unbatched 1)
+echo "VKB batch calls batched=$batched unbatched=$unbatched"

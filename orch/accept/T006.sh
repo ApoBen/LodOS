@@ -6,7 +6,7 @@ P=build/proot/arm64
 file $P/libproot.so | grep -q 'ARM aarch64'
 file $P/libproot-loader.so | grep -q 'ARM aarch64'
 grep -qi proot THIRD_PARTY.md
-D="adb -s <phone-serial>"; R=/data/local/tmp/lodos/proot
+D="adb"; R=/data/local/tmp/lodos/proot
 $D shell mkdir -p $R /data/local/tmp/lodos/tmp
 $D push $P/libproot.so $P/libproot-loader.so $R/ >/dev/null
 $D shell chmod 755 $R/libproot.so $R/libproot-loader.so

@@ -3,7 +3,7 @@ source /mnt/SSD/LodOS/orch/env.sh
 cd /mnt/SSD/LodOS/android
 ./gradlew -q assembleDebug
 apk=app/build/outputs/apk/debug/app-debug.apk; test -f $apk
-D="adb -s <phone-serial>"
+D="adb"
 $D install -r $apk
 $D shell am force-stop org.lodos.app
 $D logcat -c

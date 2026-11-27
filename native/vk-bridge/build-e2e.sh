@@ -11,7 +11,7 @@ TAG=v1.4.369
 [ -f "$VKH/registry/vk.xml" ] || git clone -q --depth 1 --branch "$TAG" https://github.com/KhronosGroup/Vulkan-Headers "$VKH"
 OUT="$ROOT/build/vk-bridge/e2e"
 GEN="$OUT/gen"
-SERIAL=${SERIAL:-<phone-serial>}
+SERIAL=${SERIAL:-${ANDROID_SERIAL:-$(adb get-serialno 2>/dev/null)}}
 PDIR=/data/local/tmp/lodos/vkb-e2e
 SOCK=${SOCK:-lodos-vk}
 rm -rf "$GEN"; mkdir -p "$GEN"

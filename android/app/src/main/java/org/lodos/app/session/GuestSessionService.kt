@@ -49,6 +49,9 @@ class GuestSessionService : Service() {
     }
 
     private val worker = Executors.newSingleThreadExecutor()
+    private val audioBridge by lazy {
+        AudioBridge(JvmProcessRunner(), File(filesDir, "logs"), File(filesDir, "run"), applicationInfo.nativeLibraryDir)
+    }
     lateinit var controller: SessionController
         private set
     private val listener: (SessionState) -> Unit = { s -> onState(s) }
@@ -67,13 +70,17 @@ class GuestSessionService : Service() {
         when (intent?.action) {
             ACTION_STOP -> worker.execute {
                 controller.stop()
+                audioBridge.stop()
                 stopForeground(STOP_FOREGROUND_REMOVE)
                 stopSelf()
             }
             else -> {
                 goForeground(controller.state)
                 worker.execute {
-                    runCatching { controller.start(buildSpec()) }
+                    runCatching {
+                        audioBridge.start()
+                        controller.start(buildSpec())
+                    }
                         .onFailure { Log.e(TAG, "start failed", it) }
                 }
             }
@@ -83,7 +90,7 @@ class GuestSessionService : Service() {
 
     override fun onDestroy() {
         controller.removeListener(listener)
-        worker.execute { controller.stop() }
+        worker.execute { controller.stop(); audioBridge.stop() }
         worker.shutdown()
         super.onDestroy()
     }
@@ -99,12 +106,21 @@ class GuestSessionService : Service() {
             tmpDir = tmp.absolutePath,
         )
         val lite = LiteMode.resolve(AndroidDeviceSpec.read(this), LiteModeStore(this).userForce)
-        return GuestSpec(paths, lite = lite, lodosInit = true)
+        val audioSocket = File(run, AudioBridge.SOCKET_NAME)
+        return GuestSpec(
+            paths,
+            lite = lite,
+            lodosInit = true,
+            extraBinds = listOf(audioSocket.absolutePath to GuestLaunch.GUEST_AUDIO_SOCKET),
+        )
     }
 
     private fun onState(s: SessionState) {
         Log.i(TAG, "state=$s pid=${Process.myPid()}")
-        if (s is SessionState.Stopped || s is SessionState.Failed) return
+        if (s is SessionState.Stopped || s is SessionState.Failed) {
+            audioBridge.stop()
+            return
+        }
         getSystemService(NotificationManager::class.java).notify(NOTIF_ID, notification(s))
     }
 
