@@ -45,6 +45,7 @@ struct sockaddr_nl {
 extern void *dlsym(void *, const char *);
 extern int getpid(void);
 extern int *__errno_location(void);
+extern char *getenv(const char *);
 extern ssize_t readlink(const char *, char *, size_t);
 extern char *getcwd(char *, size_t);
 extern int openat(int, const char *, int, ...);
@@ -52,6 +53,16 @@ extern ssize_t write(int, const void *, size_t);
 extern int lseek(int, long, int);
 extern int memfd_create(const char *, unsigned int);
 static int s_starts(const char *, const char *);
+static size_t s_len(const char *);
+
+static void trace_missing(const char *op, const char *path, int err) {
+  if (!getenv("LODOS_SHIM_TRACE") || err != 2) return;
+  (void)write(2, "elogind-shim: ", 14);
+  (void)write(2, op, s_len(op));
+  (void)write(2, " ENOENT ", 8);
+  if (path) (void)write(2, path, s_len(path));
+  (void)write(2, "\n", 1);
+}
 
 #define SEEK_SET 0
 
@@ -83,7 +94,9 @@ int open(const char *path, int flags, ...) {
   if (!real_open) real_open = dlsym(RTLD_NEXT, "open");
   int fd = fake_proc_cgroup(path);
   if (fd >= 0) return fd;
-  return real_open(path, flags, 0);
+  int r = real_open(path, flags, 0);
+  if (r < 0) trace_missing("open", path, *__errno_location());
+  return r;
 }
 
 int open64(const char *path, int flags, ...) {
@@ -91,7 +104,9 @@ int open64(const char *path, int flags, ...) {
   if (!real_open64) real_open64 = dlsym(RTLD_NEXT, "open64");
   int fd = fake_proc_cgroup(path);
   if (fd >= 0) return fd;
-  return real_open64(path, flags, 0);
+  int r = real_open64(path, flags, 0);
+  if (r < 0) trace_missing("open64", path, *__errno_location());
+  return r;
 }
 
 int openat(int dirfd, const char *path, int flags, ...) {
@@ -101,7 +116,9 @@ int openat(int dirfd, const char *path, int flags, ...) {
     int fd = fake_proc_cgroup(path);
     if (fd >= 0) return fd;
   }
-  return real_openat(dirfd, path, flags, 0);
+  int r = real_openat(dirfd, path, flags, 0);
+  if (r < 0) trace_missing("openat", path, *__errno_location());
+  return r;
 }
 
 static unsigned char fake_nl[MAX_FD];
