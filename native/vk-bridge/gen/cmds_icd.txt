@@ -404,3 +404,7 @@ vkSetDebugUtilsObjectTagEXT
 vkCmdBeginDebugUtilsLabelEXT
 vkCmdEndDebugUtilsLabelEXT
 vkCmdInsertDebugUtilsLabelEXT
+# T063 descriptor-buffer bind operations
+vkCmdBindDescriptorBuffersEXT
+vkCmdBindDescriptorBufferEmbeddedSamplersEXT
+vkCmdBindDescriptorBufferEmbeddedSamplers2EXT

@@ -10,11 +10,15 @@ import android.view.SurfaceView
 import android.view.WindowInsets
 import android.view.WindowInsetsController
 import android.view.WindowManager
+import android.view.MotionEvent
+import android.view.KeyEvent
 import java.io.File
 import java.util.concurrent.TimeUnit
 import org.lodos.app.guest.GuestLaunch
 import org.lodos.app.guest.GuestPaths
 import org.lodos.app.guest.GuestSpec
+import org.lodos.app.input.TouchMapper
+import org.lodos.app.input.TouchPointer
 
 /**
  * T022 (S2 v0): Fullscreen Wayland SurfaceView host.
@@ -37,6 +41,7 @@ class DisplayActivity : Activity(), SurfaceHolder.Callback {
 
         val surfaceView = SurfaceView(this)
         surfaceView.holder.addCallback(this)
+        surfaceView.setOnTouchListener { view, event -> onTouchEvent(view.width, view.height, event) }
         setContentView(surfaceView)
 
         window.insetsController?.let {
@@ -84,6 +89,24 @@ class DisplayActivity : Activity(), SurfaceHolder.Callback {
         }
         clientProc = null
         stop()
+    }
+
+    private fun onTouchEvent(viewWidth: Int, viewHeight: Int, event: MotionEvent): Boolean {
+        val pointers = (0 until event.pointerCount).map { i ->
+            TouchPointer(event.getPointerId(i), event.getX(i), event.getY(i))
+        }
+        TouchMapper.map(event.actionMasked, event.actionIndex, pointers, viewWidth, viewHeight).forEach {
+            touch(it.id, it.action, it.x, it.y)
+        }
+        return true
+    }
+
+    override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        if (event.action == KeyEvent.ACTION_DOWN || event.action == KeyEvent.ACTION_UP) {
+            key(event.keyCode, event.action == KeyEvent.ACTION_DOWN)
+            return true
+        }
+        return super.dispatchKeyEvent(event)
     }
 
     private fun spawnShmFill(runDir: File, sockPath: String, benchFrames: Int) {
@@ -163,6 +186,8 @@ class DisplayActivity : Activity(), SurfaceHolder.Callback {
     }
 
     private external fun start(socketPath: String, surface: Surface)
+    private external fun touch(id: Int, action: Int, x: Float, y: Float)
+    private external fun key(androidKeyCode: Int, down: Boolean)
     private external fun releaseWindow()
     private external fun stop()
 

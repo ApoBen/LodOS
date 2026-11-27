@@ -14,7 +14,7 @@
 #          launch from the app grid search, wait mapped (guest wlrctl foreign-toplevel app_ids), PNG
 #          docs/screens/T050-<app>.png, close (wlrctl toplevel close), verify gone; prints `APP <name> ok`;
 #          then the init-phosh clean shutdown. driver: scripts/pc-phosh-apps.sh; log -> build/T050-apps.log
-#   xwayland: init-phosh boot with phoc Xwayland enabled, red xterm on DISPLAY=:0, toplevel check and PNG
+#   xwayland: init-phosh boot with phoc Xwayland enabled, red xterm on phoc's selected DISPLAY, toplevel check and PNG
 # out:   PNG above (+ build/pc-desktop/{fb.ppm,lodos-wl.log,guest.log})
 # env:   PC_DESKTOP_W/H (720x1600), PC_DESKTOP_WAIT (s after client maps; 4 foot / 8 phosh), PC_DESKTOP_TIMEOUT (60)
 #        PC_DESKTOP_HOLD=1 (phosh-home: skip the scripted gestures, keep session up until killed; ctl at $RUN/ctl)
@@ -179,8 +179,8 @@ elif [ "$MODE" = xwayland ]; then
   python3 -I tools/wlctl.py "$CTL" tap "$((W / 2))" "$((H * 682 / 1000))"
   sleep 3
   # phoc/Xwayland may choose a display other than :0. Read its argv from the
-  # host /proc (the guest has no python3), and only accept Xwayland descended
-  # from this guest process tree so a host desktop server cannot be selected.
+  # host /proc (the guest has no python3). Proot can detach/reparent service
+  # children, so identify the server by ancestry OR its guest runtime auth file.
   xinfo=$(python3 -I - "$G_PID" <<'PY'
 import glob, re, sys
 
@@ -208,8 +208,6 @@ def under_guest(pid):
 for path in glob.glob("/proc/[0-9]*/cmdline"):
     try:
         pid = int(path.split("/")[2])
-        if not under_guest(pid):
-            continue
         args = open(path, "rb").read().decode(errors="replace").split("\0")
     except (OSError, ValueError):
         continue
@@ -217,7 +215,9 @@ for path in glob.glob("/proc/[0-9]*/cmdline"):
         continue
     display = next((x for x in args[1:] if re.fullmatch(r":[0-9]+", x)), None)
     auth = next((args[i + 1] for i, x in enumerate(args[:-1]) if x == "-auth"), None)
-    if display and auth:
+    # XDG_RUNTIME_DIR is /run/host-xdg in the guest. That bind-mounted
+    # location is unique to this session; host Xwayland instances cannot use it.
+    if display and auth and (under_guest(pid) or auth.startswith("/run/host-xdg/")):
         print(display, auth)
         sys.exit(0)
 sys.exit("could not find this guest's Xwayland display/auth arguments")
