@@ -7,6 +7,10 @@
 
 static PFN_vkGetInstanceProcAddr next_gipa;
 static PFN_vkGetPhysicalDeviceSurfaceCapabilitiesKHR next_caps;
+static int layer_enabled(void) {
+ const char *v=getenv("LODOS_FG");
+ return v && (!strcmp(v,"1") || !strcmp(v,"true") || !strcmp(v,"yes"));
+}
 static float scale_factor(void) {
  const char *p=getenv("LODOS_FG_PRESET");
  if(p && !strcmp(p,"quality")) return 1.5f;
@@ -14,7 +18,7 @@ static float scale_factor(void) {
  return 1.7f;
 }
 static VkResult VKAPI_CALL layer_caps(VkPhysicalDevice p,VkSurfaceKHR s,VkSurfaceCapabilitiesKHR *c) {
- VkResult r=next_caps(p,s,c); if(r || !getenv("LODOS_FG")) return r;
+ VkResult r=next_caps(p,s,c); if(r || !layer_enabled()) return r;
  float k=scale_factor();
  if(c->currentExtent.width!=UINT32_MAX) { c->currentExtent.width=(uint32_t)(c->currentExtent.width/k); c->currentExtent.height=(uint32_t)(c->currentExtent.height/k); }
  if(c->maxImageExtent.width!=UINT32_MAX) { c->maxImageExtent.width=(uint32_t)(c->maxImageExtent.width/k); c->maxImageExtent.height=(uint32_t)(c->maxImageExtent.height/k); }

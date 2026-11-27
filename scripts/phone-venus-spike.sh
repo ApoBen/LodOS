@@ -9,11 +9,13 @@ LOG=$ROOT/build/T055-venus.log
 OUT=$ROOT/build/virgl-android
 SRC=$ROOT/third_party/src/virglrenderer
 PIDFILE=/data/local/tmp/lodos/T055-venus.pids
+BASELINE_PIDFILE=/data/local/tmp/lodos/T055-bridge.pid
+BRIDGE_FPS=0
 mkdir -p build docs/research
 : >"$LOG"
 cleanup() {
   if [ -n "${SERIAL:-}" ]; then
-    adb -s "$SERIAL" shell "if [ -f $PIDFILE ]; then while read p; do kill \$p 2>/dev/null || true; done < $PIDFILE; rm -f $PIDFILE; fi" >/dev/null 2>&1 || true
+    adb -s "$SERIAL" shell "for f in $PIDFILE $BASELINE_PIDFILE; do if [ -f \$f ]; then while read p; do kill \$p 2>/dev/null || true; done < \$f; rm -f \$f; fi; done" >/dev/null 2>&1 || true
   fi
 }
 trap cleanup EXIT INT TERM
@@ -69,18 +71,28 @@ print('Missing Venus handle extensions:', ', '.join(missing) or 'none')
 PY
 mapfile -t missing < <(python3 -c 'import json; print(*json.load(open("build/T055-ext-check.json"))["missing"],sep="\n")')
 
-if timeout 240 bash scripts/guest-vkbridge-test.sh >>"$LOG" 2>&1; then
-  blockers+=("Bridge smoke test passed, but guest-vkbridge-test.sh has no vkcube FPS mode")
+if timeout 600 env NOBUILD=1 bash scripts/guest-vkwork-test.sh >>"$LOG" 2>&1; then
+  # vkcube in Debian vulkan-tools has WSI only; the guest has no WSI socket.
+  # Record a clearly identified offscreen triangle throughput proxy instead.
+  adb -s "$SERIAL" shell "cd /data/local/tmp/lodos/vkb-icd && (LODOS_VK_SOCK=@lodos-vk-g ./vkb_server > /data/local/tmp/lodos/T055-bridge.log 2>&1 & echo \$! > $BASELINE_PIDFILE)"
+  sleep 0.5
+  if timeout 120 bash scripts/phone-run.sh "LODOS_VK_SOCK='@lodos-vk-g' VK_ICD_FILENAMES='/usr/share/vulkan/icd.d/lodos_icd.json' python3 -c 'import os,subprocess,time; n=12; t=time.perf_counter(); env=dict(os.environ); [subprocess.run(['/root/vkb-icd/triangle','/tmp/T055-triangle.ppm'],env=env,check=True,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL) for _ in range(n)]; dt=time.perf_counter()-t; print(f'BRIDGE_TRIANGLE_FPS={n/dt:.6f}')'" >>"$LOG" 2>&1; then
+    BRIDGE_FPS=$(sed -n 's/^BRIDGE_TRIANGLE_FPS=//p' "$LOG" | tail -1)
+    [[ "$BRIDGE_FPS" =~ ^[0-9]+([.][0-9]+)?$ ]] || BRIDGE_FPS=0
+  else
+    blockers+=("Bridge offscreen triangle throughput proxy failed; see build/T055-venus.log")
+  fi
+  adb -s "$SERIAL" shell "kill \$(cat $BASELINE_PIDFILE) 2>/dev/null || true; rm -f $BASELINE_PIDFILE"
+  blockers+=("Bridge vkcube FPS unavailable: guest vkcube requires a WSI socket; offscreen triangle throughput is a non-comparable proxy")
 else
-  blockers+=("Bridge baseline unavailable: guest-vkbridge-test.sh failed; see build/T055-venus.log")
+  blockers+=("Bridge baseline unavailable: guest-vkwork-test.sh failed; see build/T055-venus.log")
   tail -12 "$LOG"
 fi
 
-# Keep zero until an actual comparable on-phone vkcube workload is measured.
 BLOCKERS=$(printf '%s\n' "${blockers[@]}")
-python3 - "$ROOT/docs/research/S1-venus.json.json" "${missing[*]}" "$BLOCKERS" <<'PY'
+python3 - "$ROOT/docs/research/S1-venus.json.json" "${missing[*]}" "$BLOCKERS" "$BRIDGE_FPS" <<'PY'
 import json,sys
-j={'works':False,'vkcube_fps':None,'bridge_vkcube_fps':0.0,
+j={'works':False,'vkcube_fps':None,'bridge_vkcube_fps':float(sys.argv[4]),
    'zink_glxgears_fps':None,'missing_exts':sys.argv[2].split() if sys.argv[2] else [],
    'blockers':sys.argv[3].splitlines() if sys.argv[3] else [],
    'license':'MIT','verdict':'reject'}

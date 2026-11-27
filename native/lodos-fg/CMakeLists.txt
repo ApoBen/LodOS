@@ -24,8 +24,13 @@ target_compile_definitions(fsr1_offscreen PRIVATE FSR_EASU_SPV="${SHADER_OUT}/ea
 target_link_libraries(fsr1_offscreen PRIVATE lodos-fg PNG::PNG m)
 
 add_library(lodos_fg SHARED src/layer.c)
+add_dependencies(lodos_fg fsr1_shaders)
 target_include_directories(lodos_fg PRIVATE ${VULKAN_INCLUDE_DIR})
-target_link_libraries(lodos_fg PRIVATE ${VULKAN_LIBRARY})
+target_include_directories(lodos_fg PRIVATE include third_party/amd-fsr1)
+target_compile_definitions(lodos_fg PRIVATE
+ FSR_EASU_SPV="${SHADER_OUT}/easu.spv"
+ FSR_RCAS_SPV="${SHADER_OUT}/rcas.spv")
+target_link_libraries(lodos_fg PRIVATE lodos-fg ${VULKAN_LIBRARY})
 set_target_properties(lodos_fg PROPERTIES OUTPUT_NAME lodos_fg)
 configure_file(lodos_fg.json.in lodos_fg.json @ONLY)
 add_executable(present_headless test/present_headless.c)
