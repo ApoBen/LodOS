@@ -6,6 +6,9 @@ import android.os.Process
 import android.system.Os
 import android.util.Log
 import java.io.File
+import org.lodos.app.guest.GuestLaunch
+import org.lodos.app.guest.GuestPaths
+import org.lodos.app.guest.GuestSpec
 import java.util.concurrent.TimeUnit
 
 /**
@@ -302,27 +305,20 @@ class ProbeActivity : Activity() {
     ): CmdRes {
         val outF = File(cacheDir, "rfs-$step.out")
         val errF = File(cacheDir, "rfs-$step.err")
-        val pb = ProcessBuilder(
-            "$nlib/libproot.so",
-            "-0",
-            "-r", rootfs.absolutePath,
-            "--link2symlink",
-            "--sysvipc",
-            "--kill-on-exit",
-            "-b", "/dev",
-            "-b", "${shmDir.absolutePath}:/dev/shm",
-            "-b", "/proc",
-            "-b", "/sys",
-            "-w", "/root",
-            "/usr/bin/env", "-i",
-            "HOME=/root",
-            "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
-            "TERM=xterm",
-            "DEBIAN_FRONTEND=noninteractive",
-            "/bin/sh", "-c", cmd
+        val spec = GuestSpec(
+            paths = GuestPaths(
+                nativeLibDir = nlib,
+                filesDir = filesDir.absolutePath,
+                rootfsDir = rootfs.absolutePath,
+                runDir = File(filesDir, "run").apply { mkdirs() }.absolutePath,
+                tmpDir = prootTmp.absolutePath,
+                shmDir = shmDir.absolutePath,
+            ),
+            cmd = listOf("/bin/sh", "-c", cmd),
+            extraEnv = mapOf("DEBIAN_FRONTEND" to "noninteractive"),
         )
-        pb.environment()["PROOT_LOADER"] = "$nlib/libproot_loader.so"
-        pb.environment()["PROOT_TMP_DIR"] = prootTmp.absolutePath
+        val pb = ProcessBuilder(GuestLaunch.buildArgv(spec))
+        pb.environment().putAll(GuestLaunch.hostEnv(spec))
         val t0 = System.currentTimeMillis()
         val p = pb.redirectOutput(outF).redirectError(errF).start()
         val ok = p.waitFor(timeoutSec, TimeUnit.SECONDS)
