@@ -28,3 +28,5 @@ All third-party repositories cloned into `third_party/src/` (gitignored) or refe
 | `ndk` + `ndk-sys` (crates) | `https://crates.io/crates/ndk` | `0.9.0` / `0.6.0+11769913` (Cargo.lock) | n/a (crates.io) | `MIT OR Apache-2.0` | Yes | AAudio output backend for `native/lodos-audio` (feature `android` only) |
 
 `bionic-vulkan-wrapper` LodOS build: `scripts/build-vk-layer.sh` applies `patches/bionic-vulkan-wrapper/0001-lodos-android-mali-build.patch` (no libdrm/X11/display WSI, adrenotools stub) -> `build/vk-layer/arm64/libvulkan_lodos_mali.so`.
+| Mesa | `https://gitlab.freedesktop.org/mesa/mesa` | `mesa-26.2.5` | `ddaf85e353442d9d7f192fdcf1823e652e3f2ee3` | MIT | Yes | Private EGL/Zink build for T067 no-render-node Wayland proof |
+| Local Desktop (patch reference) | `https://github.com/localdesktop/localdesktop.github.io` | `main` | `ac6295674cc0a2c437f80d71aab9995521274d28` | GPL-3.0-or-later | Yes | Adapted Mesa Wayland Kopper patch logic; patch attribution in `patches/mesa/README.md` |

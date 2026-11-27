@@ -24,7 +24,7 @@ DUMP_AFTER=${ZW_DUMP_AFTER:-100}
 W=640; H=480
 OUT="$ROOT/build/vk-bridge/host-zinkwsi"
 GEN="$OUT/gen"
-PNG="$ROOT/docs/screens/T051-zink-wsi.png"
+PNG=${ZW_PNG:-$ROOT/docs/screens/T051-zink-wsi.png}
 rm -rf "$OUT"
 mkdir -p "$GEN" "$OUT/cache" "$ROOT/docs/screens"
 
@@ -80,6 +80,7 @@ grep -q 'listening' "$OUT/srv.log" || { cat "$OUT/srv.log"; exit 1; }
 echo "== start lodos-wl headless ${W}x${H} (dump after $DUMP_AFTER commits)"
 RENDER_NODE=${LODOS_WL_DMABUF_DEV:-$(ls /dev/dri/renderD* 2>/dev/null | head -1 || true)}
 LODOS_WL_WIDTH=$W LODOS_WL_HEIGHT=$H LODOS_WL_DMABUF_DEV="$RENDER_NODE" \
+    LODOS_WL_NO_DMABUF="${ZW_NO_DMABUF:-}" \
     LODOS_WL_DUMP="$OUT/fb.ppm" LODOS_WL_DUMP_AFTER=$DUMP_AFTER \
     "$WL" "$RUN/$WLSOCK" >"$OUT/lodos-wl.log" 2>&1 &
 wl_pid=$!

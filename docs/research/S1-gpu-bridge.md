@@ -104,9 +104,9 @@ While `bionic-vulkan-wrapper` cannot run inside the `glibc` guest, **it runs nat
 ## Present path
 
 ### GDPA gaps after T063
-- Added RPC coverage for 124 previously missing names: dynamic-state setters and queries, descriptor-buffer queries/commands, and VK_EXT_debug_utils object names and labels, in addition to the earlier VK1.4 promoted aliases and local-read commands. Codegen accepts the new set (376 commands bridged; 24 remain stubs for unsupported pointer/payload shapes).
+- Added RPC coverage for 128 previously missing names, including VK_EXT_debug_marker begin/end/insert and `vkSetDeviceMemoryPriorityEXT`; codegen accepts all four additions (380 commands accepted, 377 RPC bridged, 24 remain stubs for unsupported pointer/payload shapes).
 - Remaining large groups: ray tracing and acceleration-structure builds, video, platform/external-handle WSI, opaque capture descriptor payloads, and commands whose pointer shapes still exceed generator support. Avoid exposing unsupported Mali features until device capability filtering is wired in.
-- `test/host_zink.sh` writes observed missing GDPA names to `build/vk-bridge/gdpa-misses.txt`; the current host run used llvmpipe and stopped at the zink+Arc renderer check, so no post-change Zink miss count was collected. `host_syncfd.sh` likewise stopped with `FAIL no pdev`.
+- `test/host_zink.sh` writes observed missing GDPA names to `build/vk-bridge/gdpa-misses.txt`; the current host run selected llvmpipe and stopped at the zink+Arc renderer check, so it did not collect a post-change Zink miss count. `host_syncfd.sh` previously stopped with `FAIL no pdev`.
 
 ### Guest-side WSI v0 (T047, implemented)
 - `native/vk-bridge/icd/wsi_wayland.c` (#included by icd.c): VK_KHR_surface/wayland_surface/swapchain live entirely in the guest ICD; host never sees WSI objects (VK_KHR_swapchain stripped from host CreateDevice).

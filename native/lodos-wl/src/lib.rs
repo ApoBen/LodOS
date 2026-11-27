@@ -1043,7 +1043,7 @@ fn run_server_inner(args: ServerRunArgs) -> Result<(), Box<dyn std::error::Error
         );
         let mut dmabuf_state = DmabufState::new();
         #[cfg(unix)]
-        if std::env::var_os("LODOS_WL_NO_DMABUF").is_none() {
+        if std::env::var("LODOS_WL_NO_DMABUF").as_deref() != Ok("1") {
         if let Ok(dev_path) = std::env::var("LODOS_WL_DMABUF_DEV") {
             if !dev_path.is_empty() {
                 use std::os::unix::fs::MetadataExt;
