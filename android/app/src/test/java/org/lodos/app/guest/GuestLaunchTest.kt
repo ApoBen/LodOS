@@ -12,7 +12,7 @@ class GuestLaunchTest {
     private val rootfs = Files.createTempDirectory("rootfs").toFile().absolutePath
 
     private fun paths(sdcard: String? = null) =
-        GuestPaths("/nlib", "/files", rootfs, "/files/run", "/cache/tmp", sdcard)
+        GuestPaths("/nlib", Files.createTempDirectory("files").toFile().absolutePath, rootfs, "/files/run", "/cache/tmp", sdcard)
 
     private fun spec(sdcard: String? = null, cmd: List<String> = listOf("/bin/sh", "-c", "id"), vararg env: Pair<String, String>) =
         GuestSpec(paths(sdcard), cmd, extraEnv = env.toMap())
