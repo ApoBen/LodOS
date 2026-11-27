@@ -42,7 +42,7 @@ D10 own repo of custom builds (mesa/zink, bridge, box64, fex, wine, dxvk)
 real systemd; flatpak/snap/docker/podman (no userns); kernel anticheat; VA-API hw decode; raw sockets/<1024 ports/vpn/kmods; direct usb/bt; 16K-page devices problematic (future)
 
 ## RISKS
-R1 mali vulkan bridge glibc<->bionic (boundary proven T019; remaining: full API surface/pNext/memory) | R2 mali lacks BCn etc -> transcode | R3 own wayland host (shm CPU path ok T022; zero-copy AHB/dmabuf pending) | R4 mutter can't nest in wayland -> headless+pipewire or patch | R5 fex under proot | R6 phantom process killer -> onboarding guide | R7 HyperOS blocks 1st adb install (guardprovider missing; manual 1st install worked) -> end users may hit MIUI restrictions | R8 app-uid: nativeLibDir exec + dma_heap ok (T017/T020) CLOSED | R10 proot rootfs+apt at app uid OK (T020) CLOSED; first-run extract slow 199s (T026) | R11 Mali DMA_BUF export broken (getMemoryFd fd=-1) -> export only via AHB; dma_heap ok at app uid | R12 vk-layer ICD handles (loader magic) -> bridge must use vk_icdGetInstanceProcAddr; libcutils non-NDK (T014) | R13 shell uid can't bind path AF_UNIX (SELinux); app uid OK (T017) -> abstract/unix2abstract only for adb spikes | R17 bridge mapped mem = memfd shadow + memcpy sync on flush/submit/wait (T029) -> perf cost for big buffers; later AHB-backed zero-copy | R14 ring spin vs futex: short spin -> 100x latency; need adaptive spin/per-thread tuning (power) | R15 proot cgroup2 ro -> elogind no sessions/polkit (T025) | R18 lodos-init built bionic-only; guest (glibc proot) needs gnu/musl target before use | R19 phoc nests w/o new protocols (T037 CLOSED-ish); phoc ignores request_state resize -> mode pinned via phoc.ini | R16 phone adb drops on PC suspend/resume -> phone tasks stall | R20 zink over ICD: 370 GDPA misses; no WSI/swapchain in bridge -> present must go via lodos-wl AHB/shm path (T041 sync fds) | R9 lxc rootfs URLs rotate ~3d -> fetch script resolves latest; pin own mirror for release
+R1 mali vulkan bridge glibc<->bionic (boundary proven T019; remaining: full API surface/pNext/memory) | R2 mali lacks BCn etc -> transcode | R3 own wayland host (shm CPU path ok T022; zero-copy AHB/dmabuf pending) | R4 mutter can't nest in wayland -> headless+pipewire or patch | R5 fex under proot | R6 phantom process killer -> onboarding guide | R7 HyperOS blocks 1st adb install (guardprovider missing; manual 1st install worked) -> end users may hit MIUI restrictions | R8 app-uid: nativeLibDir exec + dma_heap ok (T017/T020) CLOSED | R10 proot rootfs+apt at app uid OK (T020) CLOSED; first-run extract slow 199s (T026) | R11 Mali DMA_BUF export broken (getMemoryFd fd=-1) -> export only via AHB; dma_heap ok at app uid | R12 vk-layer ICD handles (loader magic) -> bridge must use vk_icdGetInstanceProcAddr; libcutils non-NDK (T014) | R13 shell uid can't bind path AF_UNIX (SELinux); app uid OK (T017) -> abstract/unix2abstract only for adb spikes | R17 bridge mapped mem = memfd shadow + memcpy sync on flush/submit/wait (T029) -> perf cost for big buffers; later AHB-backed zero-copy | R14 ring spin vs futex: short spin -> 100x latency; need adaptive spin/per-thread tuning (power) | R15 proot cgroup2 ro -> elogind no sessions/polkit (T025) | R18 lodos-init guest musl static built (T039 CLOSED-ish; aarch64 run untested) | R19 phoc nests w/o new protocols (T037 CLOSED-ish); phoc ignores request_state resize -> mode pinned via phoc.ini | R16 phone adb drops on PC suspend/resume -> phone tasks stall | R20 zink over ICD: 370 GDPA misses; no WSI/swapchain in bridge -> present must go via lodos-wl AHB/shm path (T041 sync fds) | R9 lxc rootfs URLs rotate ~3d -> fetch script resolves latest; pin own mirror for release
 
 ## PHASES
 P0 spikes: S1 mali bridge vkcube+zink glxgears | S2 wayland host+nested phoc+zero-copy | S3 phosh/gnome48 w/ elogind+mini-init (+test systemd --user standalone) | S4 box64+wine arm64ec in proot, Hades
@@ -91,10 +91,12 @@ P5 generalize + github + CI
 [x] T035 ICD 264 cmds (VK1.0-1.3+zink exts, ext_memory_fd), zink GL4.6 triangle on Intel via ICD; 370 GDPA misses (WSI, sync fd, VK1.4)
 [x] T036 PC x86_64 trixie guest: static x86_64 proot, scripts/pc-guest.sh, phoc/phosh/foot installed (claude-impl)
 [x] T037 phoc 0.46 pixman nested on lodos-wl headless 720x1600 + foot, docs/screens/T037-phoc-foot.png; +xdg-decoration stub, phoc.ini mode pin (claude-impl)
-[ ] T038 phosh nested on PC, PNG proof = first desktop (carbon, deps T037)
-[ ] T039 lodos-init static musl x86_64/aarch64 for guest (R18) (neon, no phone)
+[x] T038 phosh lockscreen nested on PC (dbus+stock elogind), docs/screens/T038-phosh.png = FIRST DESKTOP (claude-impl)
+[x] T039 lodos-init static musl x86_64/aarch64 (rust-lld, crt-static), 16 tests; aarch64 not exec-tested (claude-impl)
 [ ] T040 in-app bug report/log collector zip+issue body, redaction (neon, no phone)
 [ ] T041 vk-bridge sync fd sem/fence + VK1.4 cmds, host_syncfd test (carbon, no phone)
+[ ] T042 phosh unlock+grid+foot via lodos-wl ctl socket inject (wlctl.py), 3 PNGs (carbon, no phone)
+[ ] T043 phosh on phone adb spike (aarch64 guest, lodos-wl headless bionic), PNG (neon, phone)
 (live status: task files frontmatter)
 
 ## OPEN (need user)
@@ -103,6 +105,7 @@ P5 generalize + github + CI
 (none)
 
 ## LOG (newest first, 1 line each)
+2026-11-27 review18: T038,T039 ok (accept PASS; PNG verified phosh lockscreen = first desktop); +T042 unlock/grid via inject, T043 phosh on phone
 2026-11-27 review17: T036,T037 ok (claude-impl during agy quota; accept PASS, PNG verified: foot in nested phoc); next T038 phosh first desktop; queue T038-T041 PC-only
 2026-11-27 review16: T034,T035 ok (accept PASS: 4 wl tests+PPM; zink triangle via ICD); phone off adb; only T036 runnable PC -> +T039 init musl, T040 bugreport, T041 syncfd
 2026-11-27 review15: T024,T033 ok (accept PASS: box64 hello/bash/bench; 9 cargo tests); T025 a1 phone drop (todo); phone away -> +T036-T038 PC desktop path (directive)
