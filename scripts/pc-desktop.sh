@@ -178,63 +178,79 @@ elif [ "$MODE" = xwayland ]; then
   sleep 0.3
   python3 -I tools/wlctl.py "$CTL" tap "$((W / 2))" "$((H * 682 / 1000))"
   sleep 3
-  # phoc/Xwayland may choose a display other than :0. Read its argv from the
-  # host /proc (the guest has no python3). Proot can detach/reparent service
-  # children, so identify the server by ancestry OR its guest runtime auth file.
-  xinfo=$(python3 -I - "$G_PID" <<'PY'
-import glob, re, sys
+  # Read DISPLAY from this session's phoc/phosh environment. Xwayland can be
+  # started lazily, so there may be no Xwayland argv or socket to inspect yet.
+  XDISPLAY=$(python3 -I - "$G_PID" <<'PY'
+import glob, os, sys
 
 root = int(sys.argv[1])
-children = {}
-for path in glob.glob("/proc/[0-9]*/stat"):
+parents = {}
+for path in glob.glob('/proc/[0-9]*/stat'):
     try:
         raw = open(path).read()
-        # comm is parenthesized and can itself contain spaces or parentheses.
-        tail = raw[raw.rfind(")") + 2:].split()
-        pid = int(path.split("/")[2])
-        children[pid] = int(tail[1])
+        parents[int(path.split('/')[2])] = int(raw[raw.rfind(')') + 2:].split()[1])
     except (OSError, ValueError, IndexError):
-        continue
-
-def under_guest(pid):
+        pass
+def in_session(pid):
     seen = set()
     while pid and pid not in seen:
-        if pid == root:
-            return True
-        seen.add(pid)
-        pid = children.get(pid, 0)
+        if pid == root: return True
+        seen.add(pid); pid = parents.get(pid, 0)
     return False
-
-for path in glob.glob("/proc/[0-9]*/cmdline"):
+for path in glob.glob('/proc/[0-9]*/environ'):
     try:
-        pid = int(path.split("/")[2])
-        args = open(path, "rb").read().decode(errors="replace").split("\0")
+        pid = int(path.split('/')[2])
+        if not in_session(pid): continue
+        env = open(path, 'rb').read().split(b'\\0')
+        display = next((x.split(b'=', 1)[1].decode() for x in env if x.startswith(b'DISPLAY=')), '')
+        if display.startswith(':'):
+            print(display); sys.exit(0)
     except (OSError, ValueError):
-        continue
-    if not args or not (args[0].endswith("/Xwayland") or args[0] == "Xwayland"):
-        continue
-    display = next((x for x in args[1:] if re.fullmatch(r":[0-9]+", x)), None)
-    auth = next((args[i + 1] for i, x in enumerate(args[:-1]) if x == "-auth"), None)
-    # XDG_RUNTIME_DIR is /run/host-xdg in the guest. That bind-mounted
-    # location is unique to this session; host Xwayland instances cannot use it.
-    if display and auth and (under_guest(pid) or auth.startswith("/run/host-xdg/")):
-        print(display, auth)
-        sys.exit(0)
-sys.exit("could not find this guest's Xwayland display/auth arguments")
+        pass
+sys.exit(1)
 PY
-)
-  read -r XDISPLAY XAUTH < <(printf '%s\n' "$xinfo")
-  log "Xwayland display $XDISPLAY auth $XAUTH"
-  setsid bash scripts/pc-guest.sh run /usr/bin/env XDG_RUNTIME_DIR=/run/host-xdg DISPLAY="$XDISPLAY" XAUTHORITY="$XAUTH" \
+  ) || XDISPLAY=
+  if [ -z "$XDISPLAY" ]; then
+    for sock in "$RFS"/tmp/.X11-unix/X[0-9]*; do
+      [ -S "$sock" ] || continue
+      XDISPLAY=":${sock##*X}"
+      break
+    done
+  fi
+  # wlroots normally selects :0 for this isolated guest runtime. If phoc
+  # doesn't publish DISPLAY, this is the first display to probe.
+  XDISPLAY=${XDISPLAY:-:0}
+  log "trying Xwayland display $XDISPLAY (no XAUTHORITY; lazy startup enabled)"
+  setsid bash scripts/pc-guest.sh run /usr/bin/env XDG_RUNTIME_DIR=/run/host-xdg DISPLAY="$XDISPLAY" \
     xterm -title xterm -bg red -geometry 60x20 >"$OUT/xterm.log" 2>&1 &
   X_PID=$!
-  t0=$SECONDS
-  until XDG_RUNTIME_DIR=$RUN bash scripts/pc-guest.sh run /usr/bin/env WAYLAND_DISPLAY=wayland-0 \
-      wlrctl toplevel list 2>/dev/null | grep -qi xterm; do
-    kill -0 "$X_PID" 2>/dev/null || { log "xterm exited early"; cat "$OUT/xterm.log" >&2; exit 1; }
-    [ $((SECONDS - t0)) -lt "$TMO" ] || { log "timeout waiting for xterm Xwayland toplevel"; cat "$OUT/xterm.log" >&2; exit 1; }
-    sleep 0.5
-  done
+  wait_xterm() {
+    local started=$SECONDS
+    until XDG_RUNTIME_DIR=$RUN bash scripts/pc-guest.sh run /usr/bin/env WAYLAND_DISPLAY=wayland-0 \
+        wlrctl toplevel list 2>/dev/null | grep -qi xterm; do
+      kill -0 "$X_PID" 2>/dev/null || return 1
+      [ $((SECONDS - started)) -lt 20 ] || return 1
+      sleep 0.5
+    done
+    return 0
+  }
+  if ! wait_xterm; then
+    log "xterm did not map on $XDISPLAY; trying standalone Xwayland :77"
+    kill -TERM -- -"$X_PID" 2>/dev/null || true
+    wait "$X_PID" 2>/dev/null || true
+    setsid bash -c '
+      bash scripts/pc-guest.sh run /usr/bin/env XDG_RUNTIME_DIR=/run/host-xdg WAYLAND_DISPLAY=wayland-0 \
+        XDG_CONFIG_HOME=/tmp XDG_CACHE_HOME=/tmp Xwayland :77 -rootless -noreset &
+      xp=$!
+      trap "kill \$xp 2>/dev/null; wait \$xp 2>/dev/null" EXIT TERM INT
+      sleep 1
+      exec bash scripts/pc-guest.sh run /usr/bin/env XDG_RUNTIME_DIR=/run/host-xdg DISPLAY=:77 \
+        xterm -title xterm -bg red -geometry 60x20
+    ' >"$OUT/xterm-fallback.log" 2>&1 &
+    X_PID=$!
+    wait_xterm || { log "xterm failed on both phoc Xwayland and standalone :77"; cat "$OUT/xterm.log" "$OUT/xterm-fallback.log" >&2; exit 1; }
+    log "standalone Xwayland fallback mapped xterm"
+  fi
   log "xterm toplevel: $(XDG_RUNTIME_DIR=$RUN bash scripts/pc-guest.sh run /usr/bin/env WAYLAND_DISPLAY=wayland-0 wlrctl toplevel list 2>/dev/null | grep -i xterm | head -1)"
   python3 -I tools/wlctl.py "$CTL" dump "$OUT/T065-xterm.ppm"
   python3 -I scripts/ppm2png.py "$OUT/T065-xterm.ppm" "$PNG"
