@@ -178,7 +178,22 @@ elif [ "$MODE" = xwayland ]; then
   sleep 0.3
   python3 -I tools/wlctl.py "$CTL" tap "$((W / 2))" "$((H * 682 / 1000))"
   sleep 3
-  setsid bash scripts/pc-guest.sh run /usr/bin/env XDG_RUNTIME_DIR=/run/host-xdg DISPLAY=:0 \
+  # phoc/Xwayland may choose a display other than :0. Reuse the server's
+  # actual display and authorization file from its argv (shared guest /proc).
+  xinfo=$(bash scripts/pc-guest.sh run /usr/bin/python3 -c '
+import glob, os, re, sys
+for p in glob.glob("/proc/[0-9]*/cmdline"):
+    try: a=open(p,"rb").read().decode(errors="replace").split("\\0")
+    except OSError: continue
+    if not a or not (a[0].endswith("/Xwayland") or a[0] == "Xwayland"): continue
+    display=next((x for x in a[1:] if re.fullmatch(r":[0-9]+",x)),None)
+    auth=next((a[i+1] for i,x in enumerate(a[:-1]) if x=="-auth"),None)
+    if display and auth: print(display+" "+auth); sys.exit(0)
+sys.exit("could not find Xwayland display/auth arguments")
+')
+  read -r XDISPLAY XAUTH < <(printf '%s\n' "$xinfo")
+  log "Xwayland display $XDISPLAY auth $XAUTH"
+  setsid bash scripts/pc-guest.sh run /usr/bin/env XDG_RUNTIME_DIR=/run/host-xdg DISPLAY="$XDISPLAY" XAUTHORITY="$XAUTH" \
     xterm -title xterm -bg red -geometry 60x20 >"$OUT/xterm.log" 2>&1 &
   X_PID=$!
   t0=$SECONDS
