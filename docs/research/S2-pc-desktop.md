@@ -98,3 +98,8 @@
 - Android shell uid cannot create pathname sockets under `/data/local/tmp/lodos/run`: `Permission denied`. lodos-wl continues on abstract `@lodos-lodos-wl`; no root workaround was used. `libunix2abstract.so` maps the guest's `/run/host-xdg/lodos-wl` connection to that abstract name. Phoc's own `wayland-0` uses a separate abstract name, while the u2a and elogind shims handle guest socket/netlink restrictions.
 - xkbcommon is built with `xkb-config-root=/data/local/tmp/lodos/rootfs/debian/usr/share/X11/xkb` so the Android host binary reads the guest's installed `xkb-data` files. Its regular Android `/usr/share/X11/xkb` default does not exist.
 - Timing from the run: phosh logged `Phosh ready after 1.13s`; lodos-wl had a mapped toplevel and PPM dump. Total runner wall time was about 11s. Cleanup stopped lodos-wl and the phone guest daemons; `pgrep -x phoc`, `phosh`, `elogind`, and `dbus-daemon` returned no processes.
+
+## T065: X11 xterm through phoc Xwayland
+- `scripts/pc-desktop.sh xwayland` enables `xwayland=true` in the phoc config for an init-managed phosh session, unlocks phosh, launches `xterm -bg red -geometry 60x20` with `DISPLAY=:0`, and waits for an xterm foreign-toplevel from `wlrctl`.
+- It dumps `docs/screens/T065-xterm.png` through lodos-wl's headless control socket, prints `XWAYLAND ok`, and shuts down xterm, phoc, phosh, and lodos-init with the managed-session cleanup path.
+- `scripts/pc-guest.sh setup` includes Debian's `xwayland`, `xterm`, and `x11-apps` packages in its idempotent package set.

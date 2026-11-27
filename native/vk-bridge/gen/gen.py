@@ -241,6 +241,14 @@ class Reg:
             nm = proto.find('name').text
             self.cmds[nm] = [Decl(p) for p in c.findall('param') if api_ok(p)]
             self.ret[nm] = proto.find('type').text
+        # Alias names have the same wire signature as their canonical command,
+        # but need their own RPC opcode and ICD proc-table entry so applications
+        # can query either the core or extension spelling through GDPA.
+        for alias_name, target_name in raw_cmd_alias.items():
+            target_name = res_cmd_local(target_name)
+            if target_name in self.cmds:
+                self.cmds[alias_name] = self.cmds[target_name]
+                self.ret[alias_name] = self.ret[target_name]
 
     def res(self, t):
         while t in self.alias:

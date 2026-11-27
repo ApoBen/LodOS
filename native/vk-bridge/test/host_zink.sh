@@ -121,5 +121,12 @@ calls=$(sed -n 's/.*client done, \([0-9][0-9]*\) calls.*/\1/p' "$OUT/srv.log" | 
 nmiss=$(grep -c '^\[lodos-icd\] missing GDPA:' "$OUT/zink.err" || true)
 [ -n "$calls" ] || { echo "missing server calls count" >&2; exit 1; }
 
+misses="$ROOT/build/vk-bridge/gdpa-misses.txt"
+mkdir -p "$(dirname "$misses")"
+cat "$OUT/eglinfo.err" "$OUT/zink.err" 2>/dev/null \
+    | sed -n 's/^\[lodos-icd\] missing GDPA: //p' \
+    | sort -u > "$misses"
+
 echo "$cli_out"
 echo "VKB zink summary calls=$calls eglinfo_calls=${egl_calls:-0} gdpa_misses=$nmiss"
+echo "GDPA miss names: $misses"

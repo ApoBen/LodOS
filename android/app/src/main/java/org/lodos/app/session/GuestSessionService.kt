@@ -12,6 +12,7 @@ import android.os.Binder
 import android.os.Build
 import android.os.IBinder
 import android.os.Process
+import android.os.Environment
 import android.util.Log
 import java.io.File
 import java.util.concurrent.Executors
@@ -22,6 +23,7 @@ import org.lodos.app.guest.GuestSpec
 import org.lodos.app.lite.AndroidDeviceSpec
 import org.lodos.app.lite.LiteMode
 import org.lodos.app.lite.LiteModeStore
+import org.lodos.app.storage.StorageAccess
 
 /**
  * Foreground service owning the guest (T048): proot -> /sbin/lodos-init (PID1) with lite env.
@@ -33,10 +35,12 @@ class GuestSessionService : Service() {
         const val ACTION_STOP = "org.lodos.app.session.STOP"
         const val CHANNEL = "guest_session"
         const val NOTIF_ID = 0x10D0
+        private const val EXTRA_SDCARD_GRANTED = "sdcard_granted"
         private const val TAG = "LodOS.Session"
 
-        fun start(ctx: Context) {
+        fun start(ctx: Context, sdcardGranted: Boolean = false) {
             val i = Intent(ctx, GuestSessionService::class.java).setAction(ACTION_START)
+                .putExtra(EXTRA_SDCARD_GRANTED, sdcardGranted)
             if (Build.VERSION.SDK_INT >= 26) ctx.startForegroundService(i) else ctx.startService(i)
         }
 
@@ -80,7 +84,7 @@ class GuestSessionService : Service() {
                 worker.execute {
                     runCatching {
                         audioBridge.start()
-                        controller.start(buildSpec())
+                        controller.start(buildSpec(intent?.getBooleanExtra(EXTRA_SDCARD_GRANTED, false) == true))
                     }
                         .onFailure { Log.e(TAG, "start failed", it) }
                 }
@@ -96,7 +100,7 @@ class GuestSessionService : Service() {
         super.onDestroy()
     }
 
-    fun buildSpec(): GuestSpec {
+    fun buildSpec(sdcardGranted: Boolean = false): GuestSpec {
         val run = File(filesDir, "run").apply { mkdirs() }
         val tmp = File(cacheDir, "proot-tmp").apply { mkdirs() }
         val paths = GuestPaths(
@@ -105,6 +109,10 @@ class GuestSessionService : Service() {
             rootfsDir = File(filesDir, "rootfs").absolutePath,
             runDir = run.absolutePath,
             tmpDir = tmp.absolutePath,
+            sdcard = StorageAccess.sdcardPathOrNull(
+                if (sdcardGranted && hasExternalStorageAccess()) StorageAccess.State.GRANTED else StorageAccess.State.NONE,
+                Environment.getExternalStorageDirectory().absolutePath,
+            ),
         )
         val lite = LiteMode.resolve(AndroidDeviceSpec.read(this), LiteModeStore(this).userForce)
         val audioSocket = File(run, AudioBridge.SOCKET_NAME)
@@ -115,6 +123,11 @@ class GuestSessionService : Service() {
             extraBinds = listOf(audioSocket.absolutePath to GuestLaunch.GUEST_AUDIO_SOCKET),
         )
     }
+
+    private fun hasExternalStorageAccess(): Boolean =
+        if (Build.VERSION.SDK_INT >= 30) Environment.isExternalStorageManager()
+        else checkSelfPermission(android.Manifest.permission.READ_EXTERNAL_STORAGE) == android.content.pm.PackageManager.PERMISSION_GRANTED &&
+            checkSelfPermission(android.Manifest.permission.WRITE_EXTERNAL_STORAGE) == android.content.pm.PackageManager.PERMISSION_GRANTED
 
     private fun onState(s: SessionState) {
         Log.i(TAG, "state=$s pid=${Process.myPid()}")

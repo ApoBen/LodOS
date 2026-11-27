@@ -8,6 +8,7 @@ import android.content.pm.ApplicationInfo
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
+import android.os.Environment
 import android.os.IBinder
 import android.view.View
 import android.widget.Button
@@ -22,6 +23,7 @@ import org.lodos.app.session.GuestSessionService
 import org.lodos.app.session.SessionController
 import org.lodos.app.session.SessionState
 import org.lodos.app.session.SessionUiModel
+import org.lodos.app.storage.StorageAccess
 import java.io.File
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
@@ -45,6 +47,7 @@ class SetupActivity : Activity() {
     private lateinit var sessionStatusView: TextView
     private lateinit var sessionStartButton: Button
     private lateinit var sessionStopButton: Button
+    private lateinit var allowSdcardButton: Button
 
     private var bound = false
     private var pendingSessionStart = false
@@ -98,6 +101,7 @@ class SetupActivity : Activity() {
         sessionStatusView = findViewById(R.id.setup_session_status)
         sessionStartButton = findViewById(R.id.setup_btn_session_start)
         sessionStopButton = findViewById(R.id.setup_btn_session_stop)
+        allowSdcardButton = findViewById(R.id.setup_btn_allow_sdcard)
 
         val isDebuggable = (applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE) != 0
         repo = if (isDebuggable && intent.getStringExtra("fake_repo") == "1") {
@@ -130,6 +134,7 @@ class SetupActivity : Activity() {
         }
         sessionStartButton.setOnClickListener { startGuestSession() }
         sessionStopButton.setOnClickListener { GuestSessionService.stop(this) }
+        allowSdcardButton.setOnClickListener { requestSdcardAccess() }
 
         machine.addListener(stateListener)
     }
@@ -143,6 +148,7 @@ class SetupActivity : Activity() {
 
     override fun onStart() {
         super.onStart()
+        renderStorageAccess()
         bound = bindService(Intent(this, GuestSessionService::class.java), sessionConnection, BIND_AUTO_CREATE)
     }
 
@@ -164,7 +170,33 @@ class SetupActivity : Activity() {
             requestPermissions(arrayOf(android.Manifest.permission.POST_NOTIFICATIONS), REQUEST_NOTIFICATIONS)
             return
         }
-        GuestSessionService.start(this)
+        GuestSessionService.start(this, hasSdcardAccess())
+    }
+
+    private fun hasSdcardAccess(): Boolean = storageState() == StorageAccess.State.GRANTED
+
+    private fun storageState(): StorageAccess.State = StorageAccess.state(
+        Build.VERSION.SDK_INT,
+        Build.VERSION.SDK_INT >= 30 && Environment.isExternalStorageManager(),
+        Build.VERSION.SDK_INT >= 30 || checkSelfPermission(android.Manifest.permission.READ_EXTERNAL_STORAGE) == PackageManager.PERMISSION_GRANTED,
+        Build.VERSION.SDK_INT >= 30 || checkSelfPermission(android.Manifest.permission.WRITE_EXTERNAL_STORAGE) == PackageManager.PERMISSION_GRANTED,
+    )
+
+    private fun renderStorageAccess() {
+        allowSdcardButton.visibility = if (storageState() == StorageAccess.State.NEEDS_REQUEST) View.VISIBLE else View.GONE
+    }
+
+    private fun requestSdcardAccess() {
+        when (StorageAccess.requestFor(Build.VERSION.SDK_INT)) {
+            StorageAccess.Request.MANAGE_EXTERNAL_STORAGE -> {
+                val intent = Intent(android.provider.Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION)
+                    .setData(android.net.Uri.parse("package:$packageName"))
+                startActivity(intent)
+            }
+            StorageAccess.Request.READ_WRITE_EXTERNAL_STORAGE -> requestPermissions(
+                arrayOf(android.Manifest.permission.READ_EXTERNAL_STORAGE, android.Manifest.permission.WRITE_EXTERNAL_STORAGE), REQUEST_STORAGE,
+            )
+        }
     }
 
     @Deprecated("Deprecated by Android; permission result is still delivered for this Activity API")
@@ -173,8 +205,9 @@ class SetupActivity : Activity() {
         if (requestCode == REQUEST_NOTIFICATIONS && pendingSessionStart) {
             pendingSessionStart = false
             // Start either way: Android permits foreground services when this permission is denied.
-            GuestSessionService.start(this)
+            GuestSessionService.start(this, hasSdcardAccess())
         }
+        if (requestCode == REQUEST_STORAGE) renderStorageAccess()
     }
 
     private fun renderSession(state: SessionState) {
@@ -184,6 +217,7 @@ class SetupActivity : Activity() {
         sessionStartButton.isEnabled = ui.startEnabled
         sessionStopButton.text = ui.stopLabel
         sessionStopButton.isEnabled = ui.stopEnabled
+        renderStorageAccess()
     }
 
     private fun onPrimaryAction(state: SetupState) {
@@ -283,6 +317,7 @@ class SetupActivity : Activity() {
 
     companion object {
         private const val REQUEST_NOTIFICATIONS = 5201
+        private const val REQUEST_STORAGE = 5202
         private const val PREFS_NAME = "lodos_setup"
     }
 }

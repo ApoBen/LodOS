@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # PC desktop bring-up: lodos-wl headless (host) -> phoc nested (guest, wlroots wayland backend, pixman) -> foot.
-# usage: scripts/pc-desktop.sh [foot|phosh|phosh-home|init-phosh|apps]
+# usage: scripts/pc-desktop.sh [foot|phosh|phosh-home|init-phosh|apps|xwayland]
 #   foot  (default): phoc -E foot running a colour demo -> docs/screens/T037-phoc-foot.png
 #   phosh: guest system dbus + elogind, then session dbus + phoc -E phosh -> docs/screens/T038-phosh.png,
 #          guest stderr (phoc/phosh) -> build/T038-phosh.log
@@ -14,6 +14,7 @@
 #          launch from the app grid search, wait mapped (guest wlrctl foreign-toplevel app_ids), PNG
 #          docs/screens/T050-<app>.png, close (wlrctl toplevel close), verify gone; prints `APP <name> ok`;
 #          then the init-phosh clean shutdown. driver: scripts/pc-phosh-apps.sh; log -> build/T050-apps.log
+#   xwayland: init-phosh boot with phoc Xwayland enabled, red xterm on DISPLAY=:0, toplevel check and PNG
 # out:   PNG above (+ build/pc-desktop/{fb.ppm,lodos-wl.log,guest.log})
 # env:   PC_DESKTOP_W/H (720x1600), PC_DESKTOP_WAIT (s after client maps; 4 foot / 8 phosh), PC_DESKTOP_TIMEOUT (60)
 #        PC_DESKTOP_HOLD=1 (phosh-home: skip the scripted gestures, keep session up until killed; ctl at $RUN/ctl)
@@ -41,6 +42,8 @@ case "$MODE" in
          PHOSH_LOG=$ROOT/build/T045-init-phosh.log;;
   apps)  PNG=; CLIENT=phosh; SETTLE=${PC_DESKTOP_WAIT:-8}
          PHOSH_LOG=$ROOT/build/T050-apps.log;;
+  xwayland) PNG=docs/screens/T065-xterm.png; CLIENT=phosh; SETTLE=${PC_DESKTOP_WAIT:-8}
+         PHOSH_LOG=$ROOT/build/T065-xwayland.log;;
   *) log "unknown mode $MODE"; exit 2;;
 esac
 [ -x "$RFS/usr/bin/phoc" ] || { log "guest missing phoc -> run scripts/pc-guest.sh setup"; exit 1; }
@@ -57,10 +60,15 @@ mkdir -p "$RUN"; chmod 700 "$RUN"
 CTL=$RUN/ctl
 rm -f "$RUN/$SOCK" "$RUN/$SOCK.lock" "$OUT/fb.ppm" "$CTL"
 
-WL_PID=; G_PID=
+WL_PID=; G_PID=; X_PID=
 descendants() { local c; for c in $(pgrep -P "$1" 2>/dev/null); do echo "$c"; descendants "$c"; done; }
 cleanup() {
   set +e
+  if [ -n "$X_PID" ]; then
+    kill -TERM -- -"$X_PID" 2>/dev/null
+    for _ in $(seq 30); do kill -0 "$X_PID" 2>/dev/null || break; sleep 0.1; done
+    kill -KILL -- -"$X_PID" 2>/dev/null; wait "$X_PID" 2>/dev/null
+  fi
   if [ -n "$G_PID" ]; then
     local pids; pids="$G_PID $(descendants "$G_PID")"
     kill -TERM -- -"$G_PID" $pids 2>/dev/null
@@ -74,7 +82,7 @@ cleanup() {
     kill -KILL "$WL_PID" 2>/dev/null; wait "$WL_PID" 2>/dev/null
   fi
   rm -f "$RUN/$SOCK" "$RUN/$SOCK.lock" "$CTL"
-  WL_PID=; G_PID=
+  WL_PID=; G_PID=; X_PID=
 }
 trap cleanup EXIT
 trap 'exit 130' INT TERM
@@ -104,11 +112,13 @@ exec sleep 100000
 EOF
 chmod 755 "$RFS/tmp/lodos-desk-demo.sh"
 # phoc 0.46 ignores wlroots output request_state (host configure size) -> pin the nested output mode via config
-printf '[core]\nxwayland=false\n\n[output:WL-1]\nmode=%dx%d\nscale=1\n' "$W" "$H" >"$RFS/tmp/lodos-desk-phoc.ini"
+XWAYLAND=false
+[ "$MODE" = xwayland ] && XWAYLAND=true
+printf '[core]\nxwayland=%s\n\n[output:WL-1]\nmode=%dx%d\nscale=1\n' "$XWAYLAND" "$W" "$H" >"$RFS/tmp/lodos-desk-phoc.ini"
 
 GENV=()
 [ "$MODE" = phosh-home ] && GENV=(LODOS_PHOSH_NOAUTH=1)
-if [ "$MODE" = init-phosh ] || [ "$MODE" = apps ]; then
+if [ "$MODE" = init-phosh ] || [ "$MODE" = apps ] || [ "$MODE" = xwayland ]; then
   bash scripts/pc-guest-init.sh
   # lockscreen auth always succeeds (guest-only dev setting, same as T042 LODOS_PHOSH_NOAUTH)
   printf 'auth sufficient pam_permit.so\naccount sufficient pam_permit.so\n' >"$RFS/etc/pam.d/phosh"
@@ -152,6 +162,28 @@ fi
 
 if [ "$MODE" = apps ]; then
   bash scripts/pc-phosh-apps.sh "$CTL" "$W" "$H" "$OUT" "$RUN"
+elif [ "$MODE" = xwayland ]; then
+  # Unlock the init-managed phosh lockscreen (same swipe/keypad sequence as T050 apps).
+  python3 -I tools/wlctl.py "$CTL" swipe "$((W / 2))" "$((H * 94 / 100))" "$((W / 2))" "$((H * 19 / 100))" 400
+  sleep 1
+  python3 -I tools/wlctl.py "$CTL" tap "$((W * 38 / 100))" "$((H * 464 / 1000))"
+  sleep 0.3
+  python3 -I tools/wlctl.py "$CTL" tap "$((W / 2))" "$((H * 682 / 1000))"
+  sleep 3
+  setsid bash scripts/pc-guest.sh run /usr/bin/env XDG_RUNTIME_DIR=/run/host-xdg DISPLAY=:0 \
+    xterm -title xterm -bg red -geometry 60x20 >"$OUT/xterm.log" 2>&1 &
+  X_PID=$!
+  t0=$SECONDS
+  until XDG_RUNTIME_DIR=$RUN bash scripts/pc-guest.sh run /usr/bin/env WAYLAND_DISPLAY=wayland-0 \
+      wlrctl toplevel list 2>/dev/null | grep -qi xterm; do
+    kill -0 "$X_PID" 2>/dev/null || { log "xterm exited early"; cat "$OUT/xterm.log" >&2; exit 1; }
+    [ $((SECONDS - t0)) -lt "$TMO" ] || { log "timeout waiting for xterm Xwayland toplevel"; cat "$OUT/xterm.log" >&2; exit 1; }
+    sleep 0.5
+  done
+  log "xterm toplevel: $(XDG_RUNTIME_DIR=$RUN bash scripts/pc-guest.sh run /usr/bin/env WAYLAND_DISPLAY=wayland-0 wlrctl toplevel list 2>/dev/null | grep -i xterm | head -1)"
+  python3 -I tools/wlctl.py "$CTL" dump "$OUT/T065-xterm.ppm"
+  python3 -I scripts/ppm2png.py "$OUT/T065-xterm.ppm" "$PNG"
+  echo "XWAYLAND ok"
 else
   n0=$(grep -c "dumped PPM" "$OUT/lodos-wl.log" || true)
   kill -USR1 "$WL_PID"
@@ -160,7 +192,7 @@ else
   python3 -I scripts/ppm2png.py "$OUT/fb.ppm" "$PNG"
 fi
 
-if [ "$MODE" = init-phosh ] || [ "$MODE" = apps ]; then
+if [ "$MODE" = init-phosh ] || [ "$MODE" = apps ] || [ "$MODE" = xwayland ]; then
   # clean shutdown: SIGTERM lodos-init -> reverse-order unit stop; proot exits once init exits
   gpids=$(descendants "$G_PID" | tr "\n" " " || true)
   ipid=; for p in $gpids; do [ "$(ps -o comm= -p "$p" 2>/dev/null || true)" = lodos-init ] && { ipid=$p; break; }; done
