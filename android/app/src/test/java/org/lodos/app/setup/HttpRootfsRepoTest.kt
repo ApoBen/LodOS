@@ -38,7 +38,7 @@ class HttpRootfsRepoTest {
     @Test fun resumesPartialArchiveWithRange() {
         val data = ByteArray(3072) { (it % 127).toByte() }; val d = Files.createTempDirectory("rfs").toFile(); File(d, "cache").mkdirs()
         File(d, "cache/rootfs.part").writeBytes(data.copyOfRange(0, 777)); val s = server(data)
-        try { val path = repo(d).download("http://127.0.0.1:${s.address.port}/rootfs").getOrThrow(); assertArrayEquals(data, File(path).readBytes()) }
+        try { val path = repo(d).download("http://127.0.0.1:${s.address.port}/rootfs") {}.getOrThrow(); assertArrayEquals(data, File(path).readBytes()) }
         finally { s.stop(0); d.deleteRecursively() }
     }
 
