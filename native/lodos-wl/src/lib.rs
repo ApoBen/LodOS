@@ -15,6 +15,8 @@
 
 #[cfg(feature = "headless")]
 pub mod framebuffer;
+#[cfg(feature = "headless")]
+pub mod ctl;
 
 #[cfg(feature = "headless")]
 pub use framebuffer::Framebuffer;
@@ -398,6 +400,7 @@ struct HeadlessBackend {
     dump_path: Option<PathBuf>,
     dump_after_frames: Option<u64>,
     install_sigusr1: bool,
+    ctl_path: Option<PathBuf>,
 }
 
 struct ToplevelLayer {
@@ -1137,6 +1140,9 @@ fn run_server_inner(args: ServerRunArgs) -> Result<(), Box<dyn std::error::Error
             if hb.install_sigusr1 {
                 install_sigusr1_handler();
             }
+            if let Some(cp) = &hb.ctl_path {
+                ctl::insert_ctl_listener(&handle, cp)?;
+            }
         }
 
         let app = App {
@@ -1230,6 +1236,8 @@ pub struct HeadlessConfig {
     pub dump_path: Option<PathBuf>,
     pub dump_after_frames: Option<u64>,
     pub install_sigusr1: bool,
+    /// Runtime control socket path (`LODOS_WL_CTL`, see `ctl` module), None = disabled.
+    pub ctl_path: Option<PathBuf>,
 }
 
 #[cfg(feature = "headless")]
@@ -1242,6 +1250,7 @@ impl HeadlessConfig {
             dump_path: None,
             dump_after_frames: None,
             install_sigusr1: false,
+            ctl_path: None,
         }
     }
 
@@ -1273,6 +1282,10 @@ impl HeadlessConfig {
             dump_path,
             dump_after_frames,
             install_sigusr1: true,
+            ctl_path: std::env::var("LODOS_WL_CTL")
+                .ok()
+                .filter(|s| !s.is_empty())
+                .map(PathBuf::from),
         }
     }
 }
@@ -1286,6 +1299,7 @@ pub fn run_headless_blocking(config: HeadlessConfig) -> Result<(), Box<dyn std::
         dump_path: config.dump_path,
         dump_after_frames: config.dump_after_frames,
         install_sigusr1: config.install_sigusr1,
+        ctl_path: config.ctl_path,
     };
     run_server_inner(ServerRunArgs {
         path: config.socket_path,
@@ -1331,6 +1345,7 @@ impl HeadlessServer {
             dump_path: config.dump_path,
             dump_after_frames: config.dump_after_frames,
             install_sigusr1: config.install_sigusr1,
+            ctl_path: config.ctl_path,
         };
 
         let join = thread::Builder::new()

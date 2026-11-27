@@ -26,6 +26,11 @@ for _ in $(seq 50); do busctl --system list 2>/dev/null | grep -q org.freedeskto
 if busctl --system list 2>/dev/null | grep -q org.freedesktop.login1; then echo "LODOS login1 ok"
 else echo "LODOS login1 FAIL"; cat $L/elogind.log; fi
 
+# T042 phosh-home: lockscreen auth always succeeds (PAM service 'phosh' -> pam_permit); guest-only dev setting
+if [ "${LODOS_PHOSH_NOAUTH:-0}" = 1 ]; then
+  printf 'auth sufficient pam_permit.so\naccount sufficient pam_permit.so\n' >/etc/pam.d/phosh
+fi
+
 export GSETTINGS_BACKEND=memory XDG_CURRENT_DESKTOP=Phosh:GNOME XDG_SESSION_TYPE=wayland XDG_SESSION_DESKTOP=phosh
 echo "LODOS starting phoc -E phosh"
 dbus-run-session -- phoc -C "$INI" -E /usr/libexec/phosh 2>&1

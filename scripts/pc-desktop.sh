@@ -1,11 +1,15 @@
 #!/usr/bin/env bash
 # PC desktop bring-up: lodos-wl headless (host) -> phoc nested (guest, wlroots wayland backend, pixman) -> foot.
-# usage: scripts/pc-desktop.sh [foot|phosh]
+# usage: scripts/pc-desktop.sh [foot|phosh|phosh-home]
 #   foot  (default): phoc -E foot running a colour demo -> docs/screens/T037-phoc-foot.png
 #   phosh: guest system dbus + elogind, then session dbus + phoc -E phosh -> docs/screens/T038-phosh.png,
 #          guest stderr (phoc/phosh) -> build/T038-phosh.log
+#   phosh-home: phosh session + lodos-wl control socket (LODOS_WL_CTL, driven by tools/wlctl.py):
+#          swipe-unlock (guest /etc/pam.d/phosh = pam_permit), app grid, tap foot ->
+#          docs/screens/T042-phosh-{unlocked,grid,foot}.png, guest log -> build/T042-phosh.log
 # out:   PNG above (+ build/pc-desktop/{fb.ppm,lodos-wl.log,guest.log})
 # env:   PC_DESKTOP_W/H (720x1600), PC_DESKTOP_WAIT (s after client maps; 4 foot / 8 phosh), PC_DESKTOP_TIMEOUT (60)
+#        PC_DESKTOP_HOLD=1 (phosh-home: skip the scripted gestures, keep session up until killed; ctl at $RUN/ctl)
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
@@ -24,10 +28,12 @@ case "$MODE" in
   foot)  PNG=docs/screens/T037-phoc-foot.png; CLIENT=foot;  SETTLE=${PC_DESKTOP_WAIT:-4};;
   phosh) PNG=docs/screens/T038-phosh.png;     CLIENT=phosh; SETTLE=${PC_DESKTOP_WAIT:-8}
          PHOSH_LOG=$ROOT/build/T038-phosh.log;;
+  phosh-home) PNG=; CLIENT=phosh; SETTLE=${PC_DESKTOP_WAIT:-8}
+         PHOSH_LOG=$ROOT/build/T042-phosh.log;;
   *) log "unknown mode $MODE"; exit 2;;
 esac
 [ -x "$RFS/usr/bin/phoc" ] || { log "guest missing phoc -> run scripts/pc-guest.sh setup"; exit 1; }
-if [ "$MODE" = phosh ] && ! [ -e "$RFS/usr/share/glib-2.0/schemas/org.gnome.settings-daemon.peripherals.gschema.xml" ]; then
+if [ "$MODE" != foot ] && ! [ -e "$RFS/usr/share/glib-2.0/schemas/org.gnome.settings-daemon.peripherals.gschema.xml" ]; then
   log "guest missing gnome-settings-daemon-common (phosh aborts without it) -> pc-guest.sh setup"
   bash scripts/pc-guest.sh setup >&2
 fi
@@ -37,7 +43,8 @@ log "building lodos-wl (headless)"
 WL=$ROOT/native/lodos-wl/target/release/lodos-wl
 
 mkdir -p "$RUN"; chmod 700 "$RUN"
-rm -f "$RUN/$SOCK" "$RUN/$SOCK.lock" "$OUT/fb.ppm"
+CTL=$RUN/ctl
+rm -f "$RUN/$SOCK" "$RUN/$SOCK.lock" "$OUT/fb.ppm" "$CTL"
 
 WL_PID=; G_PID=
 descendants() { local c; for c in $(pgrep -P "$1" 2>/dev/null); do echo "$c"; descendants "$c"; done; }
@@ -55,14 +62,14 @@ cleanup() {
     for _ in $(seq 30); do kill -0 "$WL_PID" 2>/dev/null || break; sleep 0.1; done
     kill -KILL "$WL_PID" 2>/dev/null; wait "$WL_PID" 2>/dev/null
   fi
-  rm -f "$RUN/$SOCK" "$RUN/$SOCK.lock"
+  rm -f "$RUN/$SOCK" "$RUN/$SOCK.lock" "$CTL"
   WL_PID=; G_PID=
 }
 trap cleanup EXIT
 trap 'exit 130' INT TERM
 
 log "lodos-wl headless ${W}x${H} on $RUN/$SOCK"
-LODOS_WL_WIDTH=$W LODOS_WL_HEIGHT=$H LODOS_WL_DUMP=$OUT/fb.ppm "$WL" "$RUN/$SOCK" >"$OUT/lodos-wl.log" 2>&1 &
+LODOS_WL_WIDTH=$W LODOS_WL_HEIGHT=$H LODOS_WL_DUMP=$OUT/fb.ppm LODOS_WL_CTL=$CTL "$WL" "$RUN/$SOCK" >"$OUT/lodos-wl.log" 2>&1 &
 WL_PID=$!
 for _ in $(seq 50); do [ -S "$RUN/$SOCK" ] && break; sleep 0.1; done
 [ -S "$RUN/$SOCK" ] || { log "lodos-wl socket missing"; cat "$OUT/lodos-wl.log" >&2; exit 1; }
@@ -88,7 +95,9 @@ chmod 755 "$RFS/tmp/lodos-desk-demo.sh"
 # phoc 0.46 ignores wlroots output request_state (host configure size) -> pin the nested output mode via config
 printf '[core]\nxwayland=false\n\n[output:WL-1]\nmode=%dx%d\nscale=1\n' "$W" "$H" >"$RFS/tmp/lodos-desk-phoc.ini"
 
-if [ "$MODE" = phosh ]; then
+GENV=()
+[ "$MODE" = phosh-home ] && GENV=(LODOS_PHOSH_NOAUTH=1)
+if [ "$MODE" != foot ]; then
   install -m 755 scripts/pc-phosh-session.sh "$RFS/tmp/lodos-desk-phosh.sh"
   GCMD=(/tmp/lodos-desk-phosh.sh /tmp/lodos-desk-phoc.ini)
 else
@@ -99,7 +108,7 @@ log "guest: $MODE"
   unset WAYLAND_DISPLAY DISPLAY WAYLAND_SOCKET
   export XDG_RUNTIME_DIR=$RUN
   exec setsid bash scripts/pc-guest.sh run /usr/bin/env \
-    WAYLAND_DISPLAY=$SOCK WLR_BACKENDS=wayland WLR_RENDERER=pixman WLR_NO_HARDWARE_CURSORS=1 \
+    WAYLAND_DISPLAY=$SOCK WLR_BACKENDS=wayland WLR_RENDERER=pixman WLR_NO_HARDWARE_CURSORS=1 "${GENV[@]}" \
     "${GCMD[@]}"
 ) >"$OUT/guest.log" 2>&1 &
 G_PID=$!
@@ -114,6 +123,15 @@ until descendants "$G_PID" | xargs -r ps -o comm= -p 2>/dev/null | grep -qx "$CL
 done
 log "$CLIENT up after $((SECONDS - t0))s; settling ${SETTLE}s"
 sleep "$SETTLE"
+
+if [ "$MODE" = phosh-home ]; then
+  bash scripts/pc-phosh-home.sh "$CTL" "$W" "$H" "$OUT"
+  cleanup
+  cp "$OUT/guest.log" "$PHOSH_LOG"; log "phosh log: $PHOSH_LOG"
+  pgrep -x phoc >/dev/null && log "WARN: a phoc process is still running (not ours?)"
+  log "done: docs/screens/T042-phosh-*.png"
+  exit 0
+fi
 
 n0=$(grep -c "dumped PPM" "$OUT/lodos-wl.log" || true)
 kill -USR1 "$WL_PID"
