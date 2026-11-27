@@ -204,6 +204,9 @@ su -l root -c "sleep 2" >/tmp/lodos-su-session.log 2>&1 || true
 sessions=$(loginctl list-sessions --no-legend 2>/dev/null || true)
 if [ -n "$sessions" ]; then
   sid=${sessions%% *}
+  # Keep the synthetic /proc membership aligned with the scope elogind
+  # actually created; the daemon shim reads this file on each proc cgroup open.
+  printf 'session-%s.scope\n' "$sid" > /run/systemd/lodos-session-scope
   echo "INIT session ok $sid"
 else
   echo "INIT session fail $(tr "\n" " " < /tmp/lodos-su-session.log | head -c 120)"

@@ -35,6 +35,7 @@ struct sockaddr_nl {
 #define O_WRONLY 1
 #define O_CREAT 0100
 #define O_EXCL 0200
+#define O_RDONLY 0
 #define O_CLOEXEC 02000000
 #define EPERM 1
 #define EACCES 13
@@ -50,6 +51,7 @@ extern ssize_t readlink(const char *, char *, size_t);
 extern char *getcwd(char *, size_t);
 extern int openat(int, const char *, int, ...);
 extern ssize_t write(int, const void *, size_t);
+extern ssize_t read(int, void *, size_t);
 extern int lseek(int, long, int);
 extern int memfd_create(const char *, unsigned int);
 static int s_starts(const char *, const char *);
@@ -82,11 +84,49 @@ static int fake_proc_cgroup(const char *p) {
   if (!is_proc_cgroup(p)) return -1;
   int fd = memfd_create("lodos-cgroup", 0);
   if (fd >= 0) {
-    static const char row[] = "0::/user.slice/user-0.slice/session-c1.scope\n";
-    (void)write(fd, row, sizeof(row) - 1);
+    char scope[128] = "session-c1.scope";
+    int sf = openat(AT_FDCWD, "/run/systemd/lodos-session-scope", O_RDONLY);
+    if (sf >= 0) {
+      char value[96];
+      ssize_t n = read(sf, value, sizeof(value) - 1);
+      static int (*real_close)(int);
+      if (!real_close) real_close = dlsym(RTLD_NEXT, "close");
+      real_close(sf);
+      if (n > 0) {
+        value[n] = 0;
+        size_t i = 0;
+        while (value[i] && value[i] != '\n' && i < sizeof(scope) - 1) { scope[i] = value[i]; i++; }
+        scope[i] = 0;
+      }
+    }
+    (void)write(fd, "0::/user.slice/user-0.slice/", 28);
+    (void)write(fd, scope, s_len(scope));
+    (void)write(fd, "\n", 1);
     (void)lseek(fd, 0, SEEK_SET);
   }
   return fd;
+}
+
+static int inhibitor_ref(const char *p) {
+  static const char prefix[] = "/run/systemd/inhibit/";
+  if (!s_starts(p, prefix)) return 0;
+  p += sizeof(prefix) - 1;
+  if (*p < '0' || *p > '9') return 0;
+  while (*p >= '0' && *p <= '9') p++;
+  return p[0] == '.' && p[1] == 'r' && p[2] == 'e' && p[3] == 'f' && p[4] == 0;
+}
+
+static void create_inhibitor_ref(const char *p) {
+  if (!inhibitor_ref(p)) return;
+  static int (*real_mkfifo)(const char *, mode_t);
+  if (!real_mkfifo) real_mkfifo = dlsym(RTLD_NEXT, "mkfifo");
+  if (real_mkfifo && real_mkfifo(p, 0600) == 0) return;
+  int fd = openat(AT_FDCWD, p, O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0600);
+  if (fd >= 0) {
+    static int (*real_close)(int);
+    if (!real_close) real_close = dlsym(RTLD_NEXT, "close");
+    real_close(fd);
+  }
 }
 
 int open(const char *path, int flags, ...) {
@@ -94,7 +134,11 @@ int open(const char *path, int flags, ...) {
   if (!real_open) real_open = dlsym(RTLD_NEXT, "open");
   int fd = fake_proc_cgroup(path);
   if (fd >= 0) return fd;
-  int r = real_open(path, flags, 0);
+  int r = real_open(path, flags, 0600);
+  if (r < 0 && *__errno_location() == 2 && inhibitor_ref(path)) {
+    create_inhibitor_ref(path);
+    r = real_open(path, flags, 0600);
+  }
   if (r < 0) trace_missing("open", path, *__errno_location());
   return r;
 }
@@ -104,7 +148,11 @@ int open64(const char *path, int flags, ...) {
   if (!real_open64) real_open64 = dlsym(RTLD_NEXT, "open64");
   int fd = fake_proc_cgroup(path);
   if (fd >= 0) return fd;
-  int r = real_open64(path, flags, 0);
+  int r = real_open64(path, flags, 0600);
+  if (r < 0 && *__errno_location() == 2 && inhibitor_ref(path)) {
+    create_inhibitor_ref(path);
+    r = real_open64(path, flags, 0600);
+  }
   if (r < 0) trace_missing("open64", path, *__errno_location());
   return r;
 }
@@ -116,7 +164,11 @@ int openat(int dirfd, const char *path, int flags, ...) {
     int fd = fake_proc_cgroup(path);
     if (fd >= 0) return fd;
   }
-  int r = real_openat(dirfd, path, flags, 0);
+  int r = real_openat(dirfd, path, flags, 0600);
+  if (r < 0 && *__errno_location() == 2 && dirfd == AT_FDCWD && inhibitor_ref(path)) {
+    create_inhibitor_ref(path);
+    r = real_openat(dirfd, path, flags, 0600);
+  }
   if (r < 0) trace_missing("openat", path, *__errno_location());
   return r;
 }
