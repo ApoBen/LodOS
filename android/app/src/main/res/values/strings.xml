@@ -23,4 +23,19 @@
     <string name="setup_btn_start">Start LodOS</string>
     <string name="setup_btn_native_info">Native Info</string>
     <string name="setup_btn_report">Report a problem</string>
+    <string name="onboarding_title">Keep LodOS running</string>
+    <string name="onboarding_intro">Android may stop background Linux processes or the LodOS session. Review these device settings for a more reliable session.</string>
+    <string name="onboarding_all_clear">No extra background restrictions were detected.</string>
+    <string name="onboarding_phantom_title">Android child-process restrictions</string>
+    <string name="onboarding_phantom_title_modern">Child process restrictions (Android 14+)</string>
+    <string name="onboarding_phantom_detail">Android 12 and newer limit background child processes. On Android 14+, open Developer options and enable “Disable child process restrictions” if available. This can increase battery and memory use.</string>
+    <string name="onboarding_phantom_disabled_detail">Android child-process monitoring appears disabled. If guest processes are still stopped, review Developer options.</string>
+    <string name="onboarding_battery_title">Battery optimization is active</string>
+    <string name="onboarding_battery_detail">Allow LodOS to ignore battery optimization so Android is less likely to stop its foreground session. You can change this later in system settings.</string>
+    <string name="onboarding_oem_title">Xiaomi / POCO / Redmi background settings</string>
+    <string name="onboarding_oem_detail">In Security or Battery settings, enable Autostart for LodOS and set its battery use to “No restrictions” when available. Names vary by MIUI / HyperOS version.</string>
+    <string name="onboarding_open_settings">Open relevant settings</string>
+    <string name="onboarding_advanced_tip">Advanced optional ADB tip: adb shell settings put global settings_enable_monitor_phantom_procs 0. This changes a device-wide developer setting; use only if you understand the trade-offs.</string>
+    <string name="onboarding_done">Done</string>
+    <string name="onboarding_open_guide">Background reliability guide</string>
 </resources>

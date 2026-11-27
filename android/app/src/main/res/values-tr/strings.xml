@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="onboarding_title">LodOS çalışır durumda kalsın</string>
+    <string name="onboarding_intro">Android, arka plandaki Linux işlemlerini veya LodOS oturumunu durdurabilir. Daha güvenilir bir oturum için bu cihaz ayarlarını gözden geçirin.</string>
+    <string name="onboarding_all_clear">Ek bir arka plan kısıtlaması algılanmadı.</string>
+    <string name="onboarding_phantom_title">Android alt işlem kısıtlamaları</string>
+    <string name="onboarding_phantom_title_modern">Alt işlem kısıtlamaları (Android 14+)</string>
+    <string name="onboarding_phantom_detail">Android 12 ve üzeri arka plan alt işlemlerini sınırlar. Android 14+ sürümünde, varsa Geliştirici seçenekleri içinden “Alt işlem kısıtlamalarını devre dışı bırak” seçeneğini etkinleştirin. Pil ve bellek kullanımı artabilir.</string>
+    <string name="onboarding_phantom_disabled_detail">Android alt işlem izlemesi kapalı görünüyor. Konuk işlemleri yine de durduruluyorsa Geliştirici seçeneklerini inceleyin.</string>
+    <string name="onboarding_battery_title">Pil optimizasyonu etkin</string>
+    <string name="onboarding_battery_detail">Android'in LodOS ön plan oturumunu durdurma olasılığını azaltmak için LodOS'un pil optimizasyonunu yok saymasına izin verin. Bunu daha sonra sistem ayarlarından değiştirebilirsiniz.</string>
+    <string name="onboarding_oem_title">Xiaomi / POCO / Redmi arka plan ayarları</string>
+    <string name="onboarding_oem_detail">Güvenlik veya Pil ayarlarında LodOS için Otomatik başlatmayı etkinleştirin ve varsa pil kullanımını “Kısıtlama yok” olarak ayarlayın. MIUI / HyperOS sürümüne göre adlar değişebilir.</string>
+    <string name="onboarding_open_settings">İlgili ayarları aç</string>
+    <string name="onboarding_advanced_tip">İleri düzey isteğe bağlı ADB ipucu: adb shell settings put global settings_enable_monitor_phantom_procs 0. Bu, cihaz genelinde bir geliştirici ayarını değiştirir; yalnızca sonuçlarını biliyorsanız kullanın.</string>
+    <string name="onboarding_done">Bitti</string>
+    <string name="onboarding_open_guide">Arka plan güvenilirliği rehberi</string>
+</resources>

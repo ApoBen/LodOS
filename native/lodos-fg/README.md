@@ -17,3 +17,5 @@ Build with CMake, Vulkan development files, `glslangValidator`, and libpng. The 
 ## layer usage
 
 `VK_LAYER_LODOS_fg` currently exposes the layer manifest and scales the reported surface capabilities when `LODOS_FG=1`, `VK_LAYER_PATH` points to the build directory, and `VK_INSTANCE_LAYERS=VK_LAYER_LODOS_fg`. `LODOS_FG_PRESET` accepts quality (1.5x), balanced (1.7x), or performance (2x). This is an incomplete prototype: it does not proxy swapchain images, run FSR1 at present, or capture a real output image. The dispatch and loader-chain pattern follows Mesa's Vulkan vram-report-limit layer (MIT, `third_party/src/mesa-kopper/src/vulkan/vram-report-limit-layer`); no Mesa source is copied.
+
+The layer dispatch design follows the Vulkan loader layer interface and the Khronos Vulkan Samples' layer examples (Apache-2.0, https://github.com/KhronosGroup/Vulkan-Samples); no sample source is copied. Instance and device functions are resolved through per-dispatch-key tables, and only the capabilities and swapchain entry points used here are intercepted.

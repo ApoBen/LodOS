@@ -2,7 +2,7 @@
   "file_format_version": "1.2.0",
   "layer": {
     "name": "VK_LAYER_LODOS_fg",
-    "type": "GLOBAL",
+    "type": "INSTANCE",
     "library_path": "./liblodos_fg.so",
     "api_version": "1.3.0",
     "implementation_version": "1",

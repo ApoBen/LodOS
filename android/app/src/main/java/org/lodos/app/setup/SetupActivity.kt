@@ -24,6 +24,7 @@ import org.lodos.app.session.SessionController
 import org.lodos.app.session.SessionState
 import org.lodos.app.session.SessionUiModel
 import org.lodos.app.settings.SettingsActivity
+import org.lodos.app.onboarding.OnboardingActivity
 import org.lodos.app.storage.StorageAccess
 import java.io.File
 import java.util.concurrent.ExecutorService
@@ -103,6 +104,9 @@ class SetupActivity : Activity() {
         sessionStartButton = findViewById(R.id.setup_btn_session_start)
         sessionStopButton = findViewById(R.id.setup_btn_session_stop)
         allowSdcardButton = findViewById(R.id.setup_btn_allow_sdcard)
+        findViewById<Button>(R.id.setup_btn_onboarding).setOnClickListener {
+            startActivity(Intent(this, OnboardingActivity::class.java))
+        }
 
         val isDebuggable = (applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE) != 0
         repo = if (isDebuggable && intent.getStringExtra("fake_repo") == "1") {
