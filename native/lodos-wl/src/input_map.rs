@@ -8,6 +8,11 @@ pub enum TouchAction {
     Cancel,
 }
 
+/// Android pointer IDs are the stable slots expected by Smithay; negative IDs are invalid.
+pub fn touch_slot(pointer_id: i32) -> Option<u32> {
+    (pointer_id >= 0).then_some(pointer_id as u32)
+}
+
 pub fn touch_action(action: i32) -> Option<TouchAction> {
     match action {
         0 | 5 => Some(TouchAction::Down),
@@ -105,6 +110,15 @@ mod tests {
     #[test]
     fn unknown_keycode_ignored() {
         assert_eq!(evdev_key(999), None);
+    }
+    #[test]
+    fn multitouch_pointer_ids_remain_distinct_slots() {
+        assert_ne!(touch_slot(4), touch_slot(9));
+        assert_eq!(touch_slot(9), Some(9));
+    }
+    #[test]
+    fn negative_pointer_id_rejected() {
+        assert_eq!(touch_slot(-1), None);
     }
     #[test]
     fn coordinates_scale() {

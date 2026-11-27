@@ -1043,6 +1043,7 @@ fn run_server_inner(args: ServerRunArgs) -> Result<(), Box<dyn std::error::Error
         );
         let mut dmabuf_state = DmabufState::new();
         #[cfg(unix)]
+        if std::env::var_os("LODOS_WL_NO_DMABUF").is_none() {
         if let Ok(dev_path) = std::env::var("LODOS_WL_DMABUF_DEV") {
             if !dev_path.is_empty() {
                 use std::os::unix::fs::MetadataExt;
@@ -1064,6 +1065,7 @@ fn run_server_inner(args: ServerRunArgs) -> Result<(), Box<dyn std::error::Error
                     Err(e) => log_msg(&format!("lodos-wl: stat {dev_path} failed: {e}")),
                 }
             }
+        }
         }
         let xdg_shell_state = XdgShellState::new::<App>(&dh);
         // xdg-decoration stub: always server-side (we draw none) so nested wlroots/GTK skip CSD.
@@ -1698,13 +1700,17 @@ pub unsafe extern "system" fn Java_org_lodos_app_DisplayActivity_touch(
 ) {
     use input_map::TouchAction;
     let Some(action) = input_map::touch_action(action) else { return; };
+    let slot = input_map::touch_slot(id);
+    if !matches!(action, TouchAction::Cancel) && slot.is_none() {
+        return;
+    }
     if let Ok(guard) = server_slot().lock() {
         let Some(ctrl) = guard.as_ref() else { return; };
         if let Some((x,y)) = input_map::scale_coords(x, y, DEFAULT_WIDTH as f32, DEFAULT_HEIGHT as f32, DEFAULT_WIDTH as f32, DEFAULT_HEIGHT as f32) {
             let msg = match action {
-                TouchAction::Down => ControlMsg::TouchDown { slot: id.max(0) as u32, x, y },
-                TouchAction::Motion => ControlMsg::TouchMotion { slot: id.max(0) as u32, x, y },
-                TouchAction::Up => ControlMsg::TouchUp { slot: id.max(0) as u32 },
+                TouchAction::Down => ControlMsg::TouchDown { slot: slot.unwrap(), x, y },
+                TouchAction::Motion => ControlMsg::TouchMotion { slot: slot.unwrap(), x, y },
+                TouchAction::Up => ControlMsg::TouchUp { slot: slot.unwrap() },
                 TouchAction::Cancel => ControlMsg::TouchCancel,
             };
             let _ = ctrl.ctrl_tx.send(msg);
