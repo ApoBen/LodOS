@@ -112,6 +112,7 @@ P5 generalize + github + CI
 [ ] T054 P1 audio in APK: liblodos_audio.so + AudioBridge in FGS + guest pulse snippet (neon, no phone)
 [ ] T055 S1-alt Venus+virglrenderer vtest on phone vs vk-bridge (neon, phone, after T043)
 [ ] T056 S1-alt in-process Vulkan wrapper ICD on phone vs vk-bridge (neon, phone, after T043)
+[ ] T057 P1 "Linux Terminal" 2nd launcher icon: TerminalActivity (termux terminal libs) -> guest bash PTY, no phosh (neon, phone)
 (live status: task files frontmatter)
 
 ## OPEN (need user)
