@@ -143,15 +143,20 @@ VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL vkGetInstanceProcAddr(VkInstance i, con
     if (!strcmp(name, "vkCreateDevice")) return (PFN_vkVoidFunction)layer_create_device;
     if (!strcmp(name, "vkGetPhysicalDeviceSurfaceCapabilitiesKHR")) return (PFN_vkVoidFunction)layer_caps;
     if (!strcmp(name, "vkGetPhysicalDeviceSurfaceCapabilities2KHR")) return (PFN_vkVoidFunction)layer_caps2;
-    return d ? d->gipa(i, name) : NULL;
+    /* Returning downstream pointers for unhandled instance commands can hand
+     * the loader a trampoline that routes back through the layer chain. Let
+     * the loader continue resolution through the other layers instead. */
+    (void)d;
+    return NULL;
 }
 VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL vkGetDeviceProcAddr(VkDevice dev, const char *name) {
     if (!name) return NULL;
     if (!strcmp(name, "vkGetDeviceProcAddr")) return (PFN_vkVoidFunction)vkGetDeviceProcAddr;
     if (!strcmp(name, "vkDestroyDevice")) return (PFN_vkVoidFunction)layer_destroy_device;
     if (!strcmp(name, "vkCreateSwapchainKHR")) return (PFN_vkVoidFunction)layer_create_swapchain;
-    DeviceDispatch *d = find_device(dev);
-    return d ? d->gdpa(dev, name) : NULL;
+    /* The loader resolves commands not intercepted here from the remaining
+     * device layers and the ICD. */
+    return NULL;
 }
 VKAPI_ATTR VkResult VKAPI_CALL vkNegotiateLoaderLayerInterfaceVersion(VkNegotiateLayerInterface *v) {
     if (!v) return VK_ERROR_INITIALIZATION_FAILED;
