@@ -1,16 +1,18 @@
 #!/usr/bin/env bash
 # PC desktop bring-up: lodos-wl headless (host) -> phoc nested (guest, wlroots wayland backend, pixman) -> foot.
-# usage: scripts/pc-desktop.sh [foot]     (mode foot = phoc -E foot running a colour demo; default)
-# out:   docs/screens/T037-phoc-foot.png (+ build/pc-desktop/{fb.ppm,lodos-wl.log,guest.log})
-# env:   PC_DESKTOP_W/H (720x1600), PC_DESKTOP_WAIT (s after foot maps, default 4), PC_DESKTOP_TIMEOUT (60)
+# usage: scripts/pc-desktop.sh [foot|phosh]
+#   foot  (default): phoc -E foot running a colour demo -> docs/screens/T037-phoc-foot.png
+#   phosh: guest system dbus + elogind, then session dbus + phoc -E phosh -> docs/screens/T038-phosh.png,
+#          guest stderr (phoc/phosh) -> build/T038-phosh.log
+# out:   PNG above (+ build/pc-desktop/{fb.ppm,lodos-wl.log,guest.log})
+# env:   PC_DESKTOP_W/H (720x1600), PC_DESKTOP_WAIT (s after client maps; 4 foot / 8 phosh), PC_DESKTOP_TIMEOUT (60)
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 MODE=${1:-foot}
 W=${PC_DESKTOP_W:-720}; H=${PC_DESKTOP_H:-1600}
-SETTLE=${PC_DESKTOP_WAIT:-4}; TMO=${PC_DESKTOP_TIMEOUT:-60}
+TMO=${PC_DESKTOP_TIMEOUT:-60}
 OUT=$ROOT/build/pc-desktop; mkdir -p "$OUT" docs/screens
-PNG=docs/screens/T037-phoc-foot.png
 RFS=$ROOT/build/pc-rootfs
 # private runtime dir: guest sees it as /run/host-xdg, so phoc's own wayland-N socket can't collide with the host session
 BASE=${XDG_RUNTIME_DIR:-/tmp/lodos-run-$(id -u)}
@@ -18,8 +20,17 @@ RUN=$BASE/lodos-desk
 SOCK=lodos-wl
 log() { echo "[pc-desktop] $*" >&2; }
 
-case "$MODE" in foot) ;; *) log "unknown mode $MODE"; exit 2;; esac
+case "$MODE" in
+  foot)  PNG=docs/screens/T037-phoc-foot.png; CLIENT=foot;  SETTLE=${PC_DESKTOP_WAIT:-4};;
+  phosh) PNG=docs/screens/T038-phosh.png;     CLIENT=phosh; SETTLE=${PC_DESKTOP_WAIT:-8}
+         PHOSH_LOG=$ROOT/build/T038-phosh.log;;
+  *) log "unknown mode $MODE"; exit 2;;
+esac
 [ -x "$RFS/usr/bin/phoc" ] || { log "guest missing phoc -> run scripts/pc-guest.sh setup"; exit 1; }
+if [ "$MODE" = phosh ] && ! [ -e "$RFS/usr/share/glib-2.0/schemas/org.gnome.settings-daemon.peripherals.gschema.xml" ]; then
+  log "guest missing gnome-settings-daemon-common (phosh aborts without it) -> pc-guest.sh setup"
+  bash scripts/pc-guest.sh setup >&2
+fi
 
 log "building lodos-wl (headless)"
 (cd native/lodos-wl && cargo build --release --features headless -q)
@@ -77,25 +88,31 @@ chmod 755 "$RFS/tmp/lodos-desk-demo.sh"
 # phoc 0.46 ignores wlroots output request_state (host configure size) -> pin the nested output mode via config
 printf '[core]\nxwayland=false\n\n[output:WL-1]\nmode=%dx%d\nscale=1\n' "$W" "$H" >"$RFS/tmp/lodos-desk-phoc.ini"
 
-log "guest: phoc -E foot"
+if [ "$MODE" = phosh ]; then
+  install -m 755 scripts/pc-phosh-session.sh "$RFS/tmp/lodos-desk-phosh.sh"
+  GCMD=(/tmp/lodos-desk-phosh.sh /tmp/lodos-desk-phoc.ini)
+else
+  GCMD=(phoc -C /tmp/lodos-desk-phoc.ini -E "foot /tmp/lodos-desk-demo.sh")
+fi
+log "guest: $MODE"
 (
   unset WAYLAND_DISPLAY DISPLAY WAYLAND_SOCKET
   export XDG_RUNTIME_DIR=$RUN
   exec setsid bash scripts/pc-guest.sh run /usr/bin/env \
     WAYLAND_DISPLAY=$SOCK WLR_BACKENDS=wayland WLR_RENDERER=pixman WLR_NO_HARDWARE_CURSORS=1 \
-    phoc -C /tmp/lodos-desk-phoc.ini -E "foot /tmp/lodos-desk-demo.sh"
+    "${GCMD[@]}"
 ) >"$OUT/guest.log" 2>&1 &
 G_PID=$!
 
-# wait until foot is mapped inside phoc and phoc has committed frames to lodos-wl
+# wait until the client is mapped inside phoc and phoc has committed frames to lodos-wl
 t0=$SECONDS
-until descendants "$G_PID" | xargs -r ps -o comm= -p 2>/dev/null | grep -qx foot \
+until descendants "$G_PID" | xargs -r ps -o comm= -p 2>/dev/null | grep -qx "$CLIENT" \
       && grep -q "new xdg_toplevel" "$OUT/lodos-wl.log"; do
   kill -0 "$G_PID" 2>/dev/null || { log "guest exited early"; tail -30 "$OUT/guest.log" >&2; exit 1; }
-  [ $((SECONDS - t0)) -lt "$TMO" ] || { log "timeout waiting for foot"; tail -30 "$OUT/guest.log" >&2; exit 1; }
+  [ $((SECONDS - t0)) -lt "$TMO" ] || { log "timeout waiting for $CLIENT"; tail -30 "$OUT/guest.log" >&2; exit 1; }
   sleep 0.5
 done
-log "foot up after $((SECONDS - t0))s; settling ${SETTLE}s"
+log "$CLIENT up after $((SECONDS - t0))s; settling ${SETTLE}s"
 sleep "$SETTLE"
 
 n0=$(grep -c "dumped PPM" "$OUT/lodos-wl.log" || true)
@@ -105,5 +122,6 @@ for _ in $(seq 50); do [ "$(grep -c "dumped PPM" "$OUT/lodos-wl.log" || true)" -
 python3 -I scripts/ppm2png.py "$OUT/fb.ppm" "$PNG"
 
 cleanup
+if [ -n "${PHOSH_LOG:-}" ]; then cp "$OUT/guest.log" "$PHOSH_LOG"; log "phosh log: $PHOSH_LOG"; fi
 pgrep -x phoc >/dev/null && log "WARN: a phoc process is still running (not ours?)"
 log "done: $PNG"

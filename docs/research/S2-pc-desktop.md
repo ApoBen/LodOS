@@ -35,3 +35,14 @@
 - phoc 0.46 does not handle wlroots output `request_state`, so the host toplevel configure size is ignored (it stays at the wayland-backend default of 1280x720). The nested output size is pinned with `[output:WL-1] mode=WxH` in phoc.ini. `[core] xwayland=false` removes the Xwayland CRITICAL.
 - lodos-wl protocols that phoc+pixman needs were already there (compositor, shm, xdg_wm_base, seat, output+xdg-output). Added: an initial toplevel configure with the output size, and an xdg-decoration stub (always server-side).
 - Harmless phoc log noise: `Basic output test failed for WL-1` (x3, phoc probing modes on a disabled output), no machine-id (idle-inhibit dbus), foot "no server-side cursors / toplevel icon".
+
+## T038: phosh nested on lodos-wl headless (first desktop)
+- `scripts/pc-desktop.sh phosh`: lodos-wl headless 720x1600 -> guest `scripts/pc-phosh-session.sh` (copied to rootfs /tmp) -> system dbus -> elogind -> `dbus-run-session -- phoc -C phoc.ini -E /usr/libexec/phosh` -> SIGUSR1 dump -> docs/screens/T038-phosh.png. Guest stdout+stderr -> build/T038-phosh.log. Wall time ~10 s.
+- Result: the phosh lockscreen renders (clock, date, "Slide up to unlock", status icon). `Phosh ready after 0.13s`.
+- PC needs no shims: path AF_UNIX sockets work, and `NETLINK_KOBJECT_UEVENT` is allowed, so neither unix2abstract nor elogind-shim is needed. elogind runs unmodified.
+- System bus: a copy of stock system.conf with `<user>messagebus</user>` removed (proot -0 can't capset), `<pidfile>` removed, and `includedir system.d` made absolute (relative includedir resolves next to the config file). `dbus-daemon --nofork`. login1 is acquired.
+- Daemons stay children of the payload shell (no --fork). proot `--kill-on-exit` plus the pgid kill reap them, and nothing is left running.
+- Guest packages added to pc-guest.sh PKGS: `gnome-settings-daemon-common` (phosh aborts on the missing touchscreen schema) and `librsvg2-common` (without the SVG pixbuf loader the status/arrow icons draw as broken-image placeholders).
+- Env: `GSETTINGS_BACKEND=memory XDG_CURRENT_DESKTOP=Phosh:GNOME XDG_SESSION_TYPE=wayland`. `/etc/machine-id` is generated if it is "uninitialized".
+- Remaining warnings (not blockers): `No session for pid` from polkit (no PAM/elogind session, same as R15/T025), no org.a11y.Bus, no org.gnome.SessionManager (gnome-session isn't installed), no sm.puri.OSK0 (squeekboard isn't installed), no NetworkManager agent, no gnome-backgrounds (black wallpaper), no org.gnome.Calls. Plus the 3 known `Basic output test failed for WL-1` CRITICALs.
+- Next: unlock and home screen need input (lodos-wl seat pointer/touch injection), squeekboard for the OSK, and an elogind session (T025 cgroup shim) for polkit.
