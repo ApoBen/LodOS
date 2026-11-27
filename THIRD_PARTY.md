@@ -25,5 +25,6 @@ All third-party repositories cloned into `third_party/src/` (gitignored) or refe
 | `flate2` + `zlib-rs` (crates) | `https://crates.io/crates/flate2` | `1.1.11` / `0.6.9` (Cargo.lock) | n/a (crates.io) | `MIT OR Apache-2.0` / `Zlib` | Yes | `.tar.gz` decompression (`zlib-rs` pure-Rust backend) for `native/lodos-rootfs` |
 | `xz2` + `lzma-sys` (crates) | `https://crates.io/crates/xz2` | `0.1.7` / `0.1.20` (Cargo.lock) | n/a (crates.io) | `MIT OR Apache-2.0` (bundled liblzma: `0BSD` / Public Domain) | Yes | `.tar.xz` decompression for `native/lodos-rootfs` |
 | `zstd` + `zstd-sys` (crates) | `https://crates.io/crates/zstd` | `0.13.6` / `2.2.0+zstd.1.6.0` (Cargo.lock) | n/a (crates.io) | `MIT` (bundled libzstd: `BSD-3-Clause`) | Yes | `.tar.zst` decompression for `native/lodos-rootfs` |
+| `ndk` + `ndk-sys` (crates) | `https://crates.io/crates/ndk` | `0.9.0` / `0.6.0+11769913` (Cargo.lock) | n/a (crates.io) | `MIT OR Apache-2.0` | Yes | AAudio output backend for `native/lodos-audio` (feature `android` only) |
 
 `bionic-vulkan-wrapper` LodOS build: `scripts/build-vk-layer.sh` applies `patches/bionic-vulkan-wrapper/0001-lodos-android-mali-build.patch` (no libdrm/X11/display WSI, adrenotools stub) -> `build/vk-layer/arm64/libvulkan_lodos_mali.so`.

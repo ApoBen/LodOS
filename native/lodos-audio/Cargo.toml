@@ -1,0 +1,15 @@
+[package]
+name = "lodos-audio"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-3.0-or-later"
+description = "LodOS host audio daemon: raw S16LE PCM over unix socket -> backend (WAV on PC, AAudio on Android)"
+
+[features]
+android = ["dep:ndk"]
+
+[dependencies]
+ndk = { version = "0.9", default-features = false, features = ["audio"], optional = true }
+
+[profile.release]
+opt-level = 2
