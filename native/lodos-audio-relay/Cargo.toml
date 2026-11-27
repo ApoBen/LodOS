@@ -1,0 +1,14 @@
+[package]
+name = "lodos-audio-relay"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-3.0-or-later"
+description = "Nonblocking FIFO to Unix socket PCM relay for LodOS"
+
+[dependencies]
+libc = "0.2"
+
+[profile.release]
+strip = true
+lto = true
+opt-level = "s"

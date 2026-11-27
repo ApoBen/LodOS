@@ -62,17 +62,17 @@ gcc -std=c11 -O2 -g -Wall -Wextra -Werror -I include test/triangle.c -lvulkan -o
 nm -D --defined-only "$ICD_LIB"
 EOF
 
-echo "== guest: ensure gcc, libc6-dev, libvulkan1, vulkan-tools"
+echo "== guest: ensure gcc, libc6-dev, libvulkan1, libvulkan-dev, vulkan-tools"
 if [ "${NOBUILD:-0}" != 1 ]; then
     $R '
     set -e
-    if [ "$(dpkg -s gcc libc6-dev libvulkan1 vulkan-tools 2>/dev/null | grep -c "^Status: install ok installed")" -eq 4 ]; then
+    if [ "$(dpkg -s gcc libc6-dev libvulkan1 libvulkan-dev vulkan-tools 2>/dev/null | grep -c "^Status: install ok installed")" -eq 5 ]; then
         echo "guest packages already installed"
         exit 0
     fi
     export DEBIAN_FRONTEND=noninteractive
     apt-get update -q >/dev/null
-    apt-get install -y -q --no-install-recommends gcc libc6-dev libvulkan1 vulkan-tools >/dev/null
+    apt-get install -y -q --no-install-recommends gcc libc6-dev libvulkan1 libvulkan-dev vulkan-tools >/dev/null
     echo "guest packages installed"
     '
 fi

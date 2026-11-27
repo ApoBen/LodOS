@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# T049 S5 audio spike (PC): guest pulseaudio module-pipe-sink (FIFO) -> socat relay -> host unix socket
+# T049 S5 audio spike (PC): guest pulseaudio module-pipe-sink (FIFO) -> static relay -> host unix socket
 # -> native/lodos-audio (WavBackend) -> build/T049.wav. Prints `AUDIO ok bytes=N`.
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -9,20 +9,26 @@ OUT=$ROOT/build/T049.wav
 SOCKDIR=$ROOT/build/T049-audio
 LOG=$ROOT/build/T049-audio.log
 BIN=$ROOT/native/lodos-audio/target/release/lodos-audio
+RELAY_MODE=${LODOS_AUDIO_RELAY:-native}
 log() { echo "[pc-audio] $*" >&2; }
 
 (cd native/lodos-audio && cargo build --release -q)
+if [ "$RELAY_MODE" = native ]; then bash scripts/build-audio-relay.sh >/dev/null; fi
 
 # guest pkgs (idempotent)
 bash scripts/pc-guest.sh run /bin/sh -c '
 missing=""
-for p in pulseaudio pulseaudio-utils sox socat; do
+for p in pulseaudio pulseaudio-utils sox; do
   dpkg -s $p 2>/dev/null | grep -q "^Status: install ok installed" || missing="$missing $p"
 done
 [ -z "$missing" ] && exit 0
 echo "installing:$missing"
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -q && apt-get install -y -q --no-install-recommends $missing && apt-get clean' >&2
+
+if [ "$RELAY_MODE" = socat ]; then
+  bash scripts/pc-guest.sh run /bin/sh -c 'dpkg -s socat 2>/dev/null | grep -q "^Status: install ok installed" && exit 0; apt-get update -q && DEBIAN_FRONTEND=noninteractive apt-get install -y -q --no-install-recommends socat && apt-get clean' >&2
+fi
 
 rm -rf "$SOCKDIR"; mkdir -p "$SOCKDIR"; rm -f "$OUT"
 HPID=
@@ -40,7 +46,12 @@ for _ in $(seq 50); do [ -S "$SOCKDIR/audio.sock" ] && break; sleep 0.1; done
 [ -S "$SOCKDIR/audio.sock" ] || { log "host socket missing"; cat "$LOG" >&2; exit 1; }
 
 # guest: pulse (no default.pa) with pipe-sink paced by system clock; suspend-on-idle -> no traffic when idle
-EXTRA_BINDS="-b $SOCKDIR:/run/lodos-audio" bash scripts/pc-guest.sh run /bin/bash -c '
+if [ "$RELAY_MODE" = native ]; then
+  EXTRA_BINDS="-b $SOCKDIR:/run/lodos-audio -b $ROOT/build/audio-relay/x86_64:/run/lodos-audio-bin"
+else
+  EXTRA_BINDS="-b $SOCKDIR:/run/lodos-audio"
+fi
+LODOS_AUDIO_RELAY="$RELAY_MODE" EXTRA_BINDS="$EXTRA_BINDS" bash scripts/pc-guest.sh run /bin/bash -c '
 set -e
 rm -rf /tmp/lodos-pa; mkdir -p /tmp/lodos-pa
 F=/tmp/lodos-pa/sink.fifo; S=/tmp/lodos-pa/native.sock
@@ -53,7 +64,11 @@ pulseaudio -n --daemonize=no --exit-idle-time=-1 --use-pid-file=no --realtime=no
 PA=$!
 for i in $(seq 100); do [ -S $S ] && [ -p $F ] && break; sleep 0.1; done
 [ -S $S ] || { echo "pulse failed"; cat /tmp/lodos-pa/pa.log; exit 1; }
-socat -u OPEN:$F,rdonly UNIX-CONNECT:/run/lodos-audio/audio.sock &
+if [ "$LODOS_AUDIO_RELAY" = socat ]; then
+  socat -u OPEN:$F,rdonly UNIX-CONNECT:/run/lodos-audio/audio.sock &
+else
+  /run/lodos-audio-bin/lodos-audio-relay --fifo "$F" --sock /run/lodos-audio/audio.sock &
+fi
 RELAY=$!
 sleep 0.5
 paplay -s unix:$S -d lodos /tmp/lodos-pa/sine.wav
