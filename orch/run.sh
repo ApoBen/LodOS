@@ -62,6 +62,9 @@ CODEX=$HOME/.local/bin/codex
 # touch orch/AGY_OFF / orch/CODEX_OFF to disable an implementer manually
 agy_limited(){ [ -f "$O/AGY_OFF" ] || { [ -f "$S/agy_limited_until" ] && [ "$(date +%s)" -lt "$(cat "$S/agy_limited_until")" ]; }; }
 codex_limited(){ [ -f "$O/CODEX_OFF" ] || [ ! -x "$CODEX" ] || { [ -f "$S/codex_limited_until" ] && [ "$(date +%s)" -lt "$(cat "$S/codex_limited_until")" ]; }; }
+GROK_COOLDOWN=${GROK_COOLDOWN:-18000}
+GROK=$HOME/.local/bin/grok
+grok_limited(){ [ -f "$O/GROK_OFF" ] || [ ! -x "$GROK" ] || { [ -f "$S/grok_limited_until" ] && [ "$(date +%s)" -lt "$(cat "$S/grok_limited_until")" ]; }; }
 codex_quota(){ grep -qiE "usage limit|rate.?limit|quota|too many requests|\b429\b|purchase more credits|try again (at|in)" "$1"; }
 claude_limited(){ grep -qiE 'usage limit|limit reached|rate.?limit|out of (extra )?usage|resets? (at|in)' "$1" \
   && grep -qE '"is_error": *true' "$1"; }
@@ -96,16 +99,28 @@ $prev"
       log "codex quota (rc=$crc) -> next implementer for ${CODEX_COOLDOWN}s"; return 0
     fi
     log "CODEX $id a$att finished rc=$crc"
+  elif agy_limited && ! grok_limited; then
+    log "RUN $id a$att implementer=grok (agy+codex out)"
+    GROK_SANDBOX_AUTO_ALLOW_BASH=1 timeout 3h "$GROK" -p "IMPLEMENTER MODE (runner): you implement this task yourself. $prompt" \
+       --cwd "$R" --sandbox lodos --permission-mode acceptEdits --output-format json </dev/null >"$out" 2>&1
+    local grc=$?
+    if [ $grc -ne 0 ] && codex_quota "$out"; then
+      setf "$f" attempts "$((att-1))"; setf "$f" status todo
+      echo $(( $(date +%s) + GROK_COOLDOWN )) > "$S/grok_limited_until"
+      log "grok quota (rc=$grc) -> next implementer for ${GROK_COOLDOWN}s"; return 0
+    fi
+    log "GROK $id a$att finished rc=$grc"
   elif agy_limited; then
-    log "RUN $id a$att implementer=claude (agy+codex out)"
+    log "RUN $id a$att implementer=claude (agy+codex+grok out)"
     timeout 3h claude -p "IMPLEMENTER MODE (runner): agy quota is out, you implement this task yourself. $prompt" \
        --output-format json --dangerously-skip-permissions >"$out" 2>&1
     if claude_limited "$out"; then
       setf "$f" attempts "$((att-1))"; setf "$f" status todo
       local left=99999; [ -f "$O/AGY_OFF" ] || left=$(( $(cat "$S/agy_limited_until" 2>/dev/null || echo 0) - $(date +%s) ))
       [ -f "$S/codex_limited_until" ] && [ ! -f "$O/CODEX_OFF" ] && { local cl=$(( $(cat "$S/codex_limited_until") - $(date +%s) )); [ $cl -lt $left ] && left=$cl; }
+      [ -f "$S/grok_limited_until" ] && [ ! -f "$O/GROK_OFF" ] && { local gl=$(( $(cat "$S/grok_limited_until") - $(date +%s) )); [ $gl -lt $left ] && left=$gl; }
       if [ "$left" -le 5400 ]; then log "claude limit; waiting ${left}s for agy"; sleep "$left"; return 0; fi
-      maybe_shutdown "Claude limiti doldu (agy+codex de bitti)"
+      maybe_shutdown "Claude limiti doldu (agy+codex+grok de bitti)"
     fi
     log "CLAUDE $id a$att finished"
   else
@@ -135,7 +150,7 @@ while true; do
   if f=$(next_task); then
     run_task "$f"
     if [ "$(cat "$S/since_review" 2>/dev/null || echo 0)" -ge "$REVIEW_EVERY" ]; then
-      review; [ $? -eq 2 ] && agy_limited && codex_limited && maybe_shutdown "Claude limiti doldu (agy+codex de bitti)"
+      review; [ $? -eq 2 ] && agy_limited && codex_limited && grok_limited && maybe_shutdown "Claude limiti doldu (agy+codex+grok de bitti)"
     fi
     continue
   fi
