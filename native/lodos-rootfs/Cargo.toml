@@ -1,0 +1,35 @@
+[package]
+name = "lodos-rootfs"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-3.0-or-later"
+description = "Fast rootless tar.{gz,xz,zst} rootfs extractor for LodOS (CLI + Android JNI)"
+
+[lib]
+name = "lodos_rootfs"
+path = "src/lib.rs"
+crate-type = ["cdylib", "rlib"]
+
+[[bin]]
+name = "lodos-rootfs"
+path = "src/main.rs"
+
+[features]
+default = []
+jni = ["dep:jni-sys"]
+
+[dependencies]
+flate2 = { version = "1", default-features = false, features = ["zlib-rs"] }
+jni-sys = { version = "0.4", optional = true }
+libc = "0.2"
+tar = "0.4"
+xz2 = "0.1"
+zstd = "0.13"
+
+[dev-dependencies]
+tempfile = "3"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+strip = true
