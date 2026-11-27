@@ -24,10 +24,14 @@ integrate this with LodOS's AHardwareBuffer presentation path.
 
 ## Measurements
 
-No comparable vkcube measurement was obtained. The bridge smoke script stops
-during guest C compilation with `-Werror=maybe-uninitialized` warnings for
-`rep` and `replen` in `client/vkbc.c`, and provides no vkcube mode. Venus vkcube
-and Zink FPS are null in the JSON. The spike cleans its own phone processes.
+No comparable vkcube measurement was obtained. Debian's `vkcube` offers X11,
+Wayland, and display WSI modes, while this guest has no WSI socket and the bridge
+ICD has no headless WSI. The script records 12 successful offscreen triangle
+runs per second as a bridge throughput proxy in the required numeric
+`bridge_vkcube_fps` field; it is explicitly not comparable to Venus vkcube.
+The guest bridge compile issue was fixed by initializing the reply pointer and
+length in `client/vkbc.c`. Venus vkcube and Zink FPS remain null. The spike
+cleans its own phone processes.
 
 ## Recommendation
 

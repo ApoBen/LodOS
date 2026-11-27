@@ -6,7 +6,8 @@
   "missing_exts": [],
   "blockers": [
     "Android NDK build failed; see build/T055-venus.log",
-    "Bridge baseline unavailable: guest-vkbridge-test.sh failed; see build/T055-venus.log"
+    "Bridge offscreen triangle throughput proxy failed; see build/T055-venus.log",
+    "Bridge vkcube FPS unavailable: guest vkcube requires a WSI socket; offscreen triangle throughput is a non-comparable proxy"
   ],
   "license": "MIT",
   "verdict": "reject"

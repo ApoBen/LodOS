@@ -72,7 +72,9 @@ cleanup() {
 trap cleanup EXIT
 
 echo "== start vkb_server (VK_DRIVER_FILES=$HOST_ICD, LODOS_VK_SOCK=$SOCK)"
-VK_DRIVER_FILES="$HOST_ICD" LODOS_VK_SOCK="$SOCK" "$OUT/vkb_server" >"$OUT/srv.log" 2>&1 &
+# VK_DRIVER_FILES is the current loader override. Keep the legacy variable too
+# because distro Vulkan loaders in the PC proof environment may predate it.
+VK_DRIVER_FILES="$HOST_ICD" VK_ICD_FILENAMES="$HOST_ICD" LODOS_VK_SOCK="$SOCK" "$OUT/vkb_server" >"$OUT/srv.log" 2>&1 &
 srv_pid=$!
 for _ in $(seq 1 50); do grep -q 'listening' "$OUT/srv.log" 2>/dev/null && break; sleep 0.05; done
 grep -q 'listening' "$OUT/srv.log" || { cat "$OUT/srv.log"; exit 1; }

@@ -19,6 +19,7 @@ data class GuestSpec(
     val paths: GuestPaths,
     val cmd: List<String> = emptyList(),
     val lite: LiteProfile? = null,
+    val settingsEnv: Map<String, String> = emptyMap(),
     val extraEnv: Map<String, String> = emptyMap(),
     /** host -> guest */
     val extraBinds: List<Pair<String, String>> = emptyList(),
@@ -71,6 +72,7 @@ object GuestLaunch {
         )
         spec.lite?.let { e.putAll(LiteMode.toGuestEnv(it)) }
         if (spec.lite != null) e["LODOS_GSETTINGS_OVERRIDE"] = "$GUEST_SCHEMA_DIR/99-lodos.gschema.override"
+        e.putAll(spec.settingsEnv)
         e.putAll(spec.extraEnv)
         return e
     }

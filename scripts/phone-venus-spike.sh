@@ -74,7 +74,7 @@ mapfile -t missing < <(python3 -c 'import json; print(*json.load(open("build/T05
 if timeout 600 env NOBUILD=1 bash scripts/guest-vkwork-test.sh >>"$LOG" 2>&1; then
   # vkcube in Debian vulkan-tools has WSI only; the guest has no WSI socket.
   # Record a clearly identified offscreen triangle throughput proxy instead.
-  adb -s "$SERIAL" shell "cd /data/local/tmp/lodos/vkb-icd && (LODOS_VK_SOCK=@lodos-vk-g ./vkb_server > /data/local/tmp/lodos/T055-bridge.log 2>&1 & echo \$! > $BASELINE_PIDFILE)"
+  adb -s "$SERIAL" shell "cd /data/local/tmp/lodos/vkb-icd && (LODOS_VK_SOCK=@lodos-vk-g ./vkb_server-icd > /data/local/tmp/lodos/T055-bridge.log 2>&1 & echo \$! > $BASELINE_PIDFILE)"
   sleep 0.5
   if timeout 120 bash scripts/phone-run.sh "LODOS_VK_SOCK='@lodos-vk-g' VK_ICD_FILENAMES='/usr/share/vulkan/icd.d/lodos_icd.json' python3 -c 'import os,subprocess,time; n=12; t=time.perf_counter(); env=dict(os.environ); [subprocess.run([\"/root/vkb-icd/triangle\",\"/tmp/T055-triangle.ppm\"],env=env,check=True,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL) for _ in range(n)]; dt=time.perf_counter()-t; print(f\"BRIDGE_TRIANGLE_FPS={n/dt:.6f}\")'" >>"$LOG" 2>&1; then
     BRIDGE_FPS=$(sed -n 's/^BRIDGE_TRIANGLE_FPS=//p' "$LOG" | tail -1)

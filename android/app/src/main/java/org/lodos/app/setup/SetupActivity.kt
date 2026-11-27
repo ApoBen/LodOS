@@ -23,6 +23,7 @@ import org.lodos.app.session.GuestSessionService
 import org.lodos.app.session.SessionController
 import org.lodos.app.session.SessionState
 import org.lodos.app.session.SessionUiModel
+import org.lodos.app.settings.SettingsActivity
 import org.lodos.app.storage.StorageAccess
 import java.io.File
 import java.util.concurrent.ExecutorService
@@ -131,6 +132,9 @@ class SetupActivity : Activity() {
         }
         nativeInfoButton.setOnClickListener {
             startActivity(Intent(this, MainActivity::class.java))
+        }
+        findViewById<Button>(R.id.setup_btn_settings).setOnClickListener {
+            startActivity(Intent(this, SettingsActivity::class.java))
         }
         sessionStartButton.setOnClickListener { startGuestSession() }
         sessionStopButton.setOnClickListener { GuestSessionService.stop(this) }

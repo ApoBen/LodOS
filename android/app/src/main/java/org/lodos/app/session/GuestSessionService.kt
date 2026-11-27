@@ -22,7 +22,8 @@ import org.lodos.app.guest.GuestPaths
 import org.lodos.app.guest.GuestSpec
 import org.lodos.app.lite.AndroidDeviceSpec
 import org.lodos.app.lite.LiteMode
-import org.lodos.app.lite.LiteModeStore
+import org.lodos.app.settings.LodosSettingsStore
+import org.lodos.app.settings.SettingsEnv
 import org.lodos.app.storage.StorageAccess
 
 /**
@@ -114,11 +115,15 @@ class GuestSessionService : Service() {
                 Environment.getExternalStorageDirectory().absolutePath,
             ),
         )
-        val lite = LiteMode.resolve(AndroidDeviceSpec.read(this), LiteModeStore(this).userForce)
+        val settings = LodosSettingsStore(this).read()
+        val tier = LiteMode.classify(AndroidDeviceSpec.read(this))
+        val lite = SettingsEnv.liteProfile(settings, tier)
+        val settingsEnv = SettingsEnv.toEnv(settings, tier)
         val audioSocket = File(run, AudioBridge.SOCKET_NAME)
         return GuestSpec(
             paths,
             lite = lite,
+            settingsEnv = settingsEnv,
             lodosInit = true,
             extraBinds = listOf(audioSocket.absolutePath to GuestLaunch.GUEST_AUDIO_SOCKET),
         )

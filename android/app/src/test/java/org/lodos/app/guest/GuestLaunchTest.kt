@@ -73,6 +73,13 @@ class GuestLaunchTest {
         assertTrue("LODOS_LITE=1" in GuestLaunch.buildArgv(s))
     }
 
+    @Test fun graphicsSettingsEnvMerged() {
+        val s = GuestSpec(paths(), listOf("true"), settingsEnv = mapOf(
+            "LODOS_FG" to "1", "LODOS_FG_PRESET" to "balanced", "LODOS_FG_SHARPNESS" to "0.2",
+        ))
+        assertEquals("1", GuestLaunch.buildEnv(s)["LODOS_FG"])
+    }
+
     @Test fun extraEnvOverrides() {
         val s = GuestSpec(paths(), listOf("true"), lite = LiteMode.profileFor(Tier.LOW),
             extraEnv = mapOf("LANG" to "en_US.UTF-8", "LODOS_LITE" to "0", "PROOT_LOADER" to "/evil"))

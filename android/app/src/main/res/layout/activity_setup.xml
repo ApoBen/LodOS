@@ -111,6 +111,12 @@
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:text="@string/setup_btn_native_info" />
+
+        <Button
+            android:id="@+id/setup_btn_settings"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Settings" />
     </LinearLayout>
 
     <View
