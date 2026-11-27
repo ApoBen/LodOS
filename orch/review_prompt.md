@@ -8,3 +8,5 @@ LodOS checkpoint review (headless, coordinator role). Be token-frugal: do NOT re
 Finish with a one-line summary.
 
 Parallelism (since 2026-11-27): runner runs up to 3 lanes. Tasks never overlap when they share a resource: phone (needs_phone/adb), gradle (android build), pcdisplay (lodos-wl/phoc/phosh on PC). To use the lanes, keep 2+ runnable tasks queued that do NOT share these: e.g. one phone task + one android/gradle task + one pure PC task (Rust/vk-bridge/scripts/docs/research). Split big work into such independent tasks.
+
+Upstream: for every new patches/<project>/ change, check that README.md documents it (what/why/test/upstreamable). Add upstreamable candidates as a row in UPSTREAM.md (status: candidate). Never push or open PRs; Claude does that interactively after user approval.

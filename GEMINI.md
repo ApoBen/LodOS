@@ -8,6 +8,8 @@ ctx: /mnt/SSD/LodOS/ai.md = project state (read GOAL/DECISIONS/ENV only if neede
 - do NOT edit: ai.md, CLAUDE.md, GEMINI.md, orch/*.sh, orch/review_prompt.md, other tasks' files.
 - do NOT run git commit/reset/checkout/push/rebase. Runner commits.
 - third-party code: only GPL-3-compatible; record source URL+license+commit in THIRD_PARTY.md. Clones go to third_party/src/ (gitignored).
+- reuse-first: before writing a component, look for an existing OSS project (see ai.md reuse list) and use it.
+- when you modify third-party code: put the diff in patches/<project>/NNNN-<slug>.patch (git format-patch style, against the pinned upstream commit) and add/extend patches/<project>/README.md with: upstream URL + pinned commit, per patch: what changed, why (the bug or missing feature, how to reproduce), how it was tested, whether it is LodOS-specific or generally useful upstream ("upstreamable: yes/no + reason"). Never open PRs/issues yourself.
 - research output -> docs/research/. Env vars: `source orch/env.sh` (once T001 done).
 
 ## phone (adb -s <phone-serial>, POCO X7 Pro, NOT rooted, user's personal phone)
