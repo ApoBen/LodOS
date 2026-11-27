@@ -92,7 +92,7 @@ adb -s "$SERIAL" shell "cd $PDIR && chmod 755 vkb_server-icd && \
     for i in \$(seq 1 30); do grep -q 'listening' srv-icd.log 2>/dev/null && break; sleep 0.1; done"
 
 rc=0
-$R "LODOS_VK_SOCK='$LODOS_VK_SOCK' VK_ICD_FILENAMES='$ICD_JSON' $GDIR/compute && LODOS_VK_SOCK='$LODOS_VK_SOCK' VK_ICD_FILENAMES='$ICD_JSON' $GDIR/triangle" || rc=$?
+$R "LODOS_VK_SOCK='$LODOS_VK_SOCK' VK_ICD_FILENAMES='$ICD_JSON' $GDIR/compute && LODOS_VK_SOCK='$LODOS_VK_SOCK' VK_ICD_FILENAMES='$ICD_JSON' $GDIR/triangle $GDIR/triangle.ppm" || rc=$?
 
 server_log=$(adb -s "$SERIAL" shell "cd $PDIR; [ -f srv-icd.pid ] && kill \$(cat srv-icd.pid) 2>/dev/null; sleep 0.1; cat srv-icd.log; rm -f srv-icd.pid")
 echo "-- server log"
