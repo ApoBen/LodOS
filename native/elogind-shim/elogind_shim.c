@@ -49,6 +49,60 @@ extern ssize_t readlink(const char *, char *, size_t);
 extern char *getcwd(char *, size_t);
 extern int openat(int, const char *, int, ...);
 extern ssize_t write(int, const void *, size_t);
+extern int lseek(int, long, int);
+extern int memfd_create(const char *, unsigned int);
+static int s_starts(const char *, const char *);
+
+#define SEEK_SET 0
+
+static int is_proc_cgroup(const char *p) {
+  if (!p || !s_starts(p, "/proc/")) return 0;
+  const char *q = p + 6;
+  if (*q == 's' && q[1] == 'e' && q[2] == 'l' && q[3] == 'f') q += 4;
+  else {
+    if (*q < '0' || *q > '9') return 0;
+    while (*q >= '0' && *q <= '9') q++;
+  }
+  return q[0] == '/' && q[1] == 'c' && q[2] == 'g' && q[3] == 'r' &&
+         q[4] == 'o' && q[5] == 'u' && q[6] == 'p' && q[7] == 0;
+}
+
+static int fake_proc_cgroup(const char *p) {
+  if (!is_proc_cgroup(p)) return -1;
+  int fd = memfd_create("lodos-cgroup", 0);
+  if (fd >= 0) {
+    static const char row[] = "0::/user.slice/user-0.slice/session-c1.scope\n";
+    (void)write(fd, row, sizeof(row) - 1);
+    (void)lseek(fd, 0, SEEK_SET);
+  }
+  return fd;
+}
+
+int open(const char *path, int flags, ...) {
+  static int (*real_open)(const char *, int, ...);
+  if (!real_open) real_open = dlsym(RTLD_NEXT, "open");
+  int fd = fake_proc_cgroup(path);
+  if (fd >= 0) return fd;
+  return real_open(path, flags, 0);
+}
+
+int open64(const char *path, int flags, ...) {
+  static int (*real_open64)(const char *, int, ...);
+  if (!real_open64) real_open64 = dlsym(RTLD_NEXT, "open64");
+  int fd = fake_proc_cgroup(path);
+  if (fd >= 0) return fd;
+  return real_open64(path, flags, 0);
+}
+
+int openat(int dirfd, const char *path, int flags, ...) {
+  static int (*real_openat)(int, const char *, int, ...);
+  if (!real_openat) real_openat = dlsym(RTLD_NEXT, "openat");
+  if (dirfd == AT_FDCWD) {
+    int fd = fake_proc_cgroup(path);
+    if (fd >= 0) return fd;
+  }
+  return real_openat(dirfd, path, flags, 0);
+}
 
 static unsigned char fake_nl[MAX_FD];
 
