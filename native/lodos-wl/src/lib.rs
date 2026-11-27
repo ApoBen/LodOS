@@ -17,6 +17,7 @@
 pub mod framebuffer;
 #[cfg(feature = "headless")]
 pub mod ctl;
+pub mod input_map;
 
 #[cfg(feature = "headless")]
 pub use framebuffer::Framebuffer;
@@ -1520,6 +1521,7 @@ struct ServerController {
     stop_flag: Arc<AtomicBool>,
     ping: Ping,
     join: Option<JoinHandle<()>>,
+    ctrl_tx: smithay::reexports::calloop::channel::Sender<ControlMsg>,
 }
 
 impl ServerController {
@@ -1569,6 +1571,7 @@ fn start_with_window(sock_path: PathBuf, win: Option<NonNull<ANativeWindow>>) ->
     let stop_flag = Arc::new(AtomicBool::new(false));
     let (ping, ping_src) = make_ping().map_err(|e| format!("make_ping: {e}"))?;
     let (ready_tx, ready_rx) = mpsc::sync_channel(1);
+    let (ctrl_tx, ctrl_rx) = smithay::reexports::calloop::channel::channel::<ControlMsg>();
 
     let thread_path = sock_path.clone();
     let thread_presenter = Arc::clone(&presenter);
@@ -1584,7 +1587,7 @@ fn start_with_window(sock_path: PathBuf, win: Option<NonNull<ANativeWindow>>) ->
                 #[cfg(feature = "headless")]
                 headless: None,
                 stats: Arc::new(Mutex::new(ServerStats::default())),
-                ctrl_rx: None,
+                ctrl_rx: Some(ctrl_rx),
                 stop_ctl: Some((thread_stop, ping_src)),
                 ready_tx: Some(ready_tx),
             }) {
@@ -1601,6 +1604,7 @@ fn start_with_window(sock_path: PathBuf, win: Option<NonNull<ANativeWindow>>) ->
                 stop_flag,
                 ping,
                 join: Some(join),
+                ctrl_tx,
             });
             Ok(())
         }
@@ -1684,6 +1688,40 @@ pub unsafe extern "system" fn Java_org_lodos_app_DisplayActivity_start(
 
     if let Err(e) = start_with_window(PathBuf::from(&path), win_nn) {
         log_msg(&format!("lodos-wl: JNI start({path}) failed: {e}"));
+    }
+}
+
+/// JNI entry: touch event in SurfaceView pixels; pointer ids are stable Android pointer ids.
+#[no_mangle]
+pub unsafe extern "system" fn Java_org_lodos_app_DisplayActivity_touch(
+    _env: *mut JNIEnv, _thiz: jobject, id: i32, action: i32, x: f32, y: f32,
+) {
+    use input_map::TouchAction;
+    let Some(action) = input_map::touch_action(action) else { return; };
+    if let Ok(guard) = server_slot().lock() {
+        let Some(ctrl) = guard.as_ref() else { return; };
+        if let Some((x,y)) = input_map::scale_coords(x, y, DEFAULT_WIDTH as f32, DEFAULT_HEIGHT as f32, DEFAULT_WIDTH as f32, DEFAULT_HEIGHT as f32) {
+            let msg = match action {
+                TouchAction::Down => ControlMsg::TouchDown { slot: id.max(0) as u32, x, y },
+                TouchAction::Motion => ControlMsg::TouchMotion { slot: id.max(0) as u32, x, y },
+                TouchAction::Up => ControlMsg::TouchUp { slot: id.max(0) as u32 },
+                TouchAction::Cancel => ControlMsg::TouchCancel,
+            };
+            let _ = ctrl.ctrl_tx.send(msg);
+        }
+    }
+}
+
+/// JNI entry: Android KeyEvent key code, translated to Linux evdev before seat injection.
+#[no_mangle]
+pub unsafe extern "system" fn Java_org_lodos_app_DisplayActivity_key(
+    _env: *mut JNIEnv, _thiz: jobject, android_key_code: i32, down: u8,
+) {
+    let Some(evdev_code) = input_map::evdev_key(android_key_code) else { return; };
+    if let Ok(guard) = server_slot().lock() {
+        if let Some(ctrl) = guard.as_ref() {
+            let _ = ctrl.ctrl_tx.send(ControlMsg::Key { evdev_code, pressed: down != 0 });
+        }
     }
 }
 

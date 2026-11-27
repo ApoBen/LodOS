@@ -398,3 +398,9 @@ vkQueueNotifyOutOfBandLegacyNV
 vkQueueNotifyOutOfBandNV
 vkQueueSetPerfHintQCOM
 vkQueueSetPerformanceConfigurationINTEL
+# T063 VK_EXT_debug_utils device and command buffer markers
+vkSetDebugUtilsObjectNameEXT
+vkSetDebugUtilsObjectTagEXT
+vkCmdBeginDebugUtilsLabelEXT
+vkCmdEndDebugUtilsLabelEXT
+vkCmdInsertDebugUtilsLabelEXT

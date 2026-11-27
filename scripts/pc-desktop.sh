@@ -178,19 +178,51 @@ elif [ "$MODE" = xwayland ]; then
   sleep 0.3
   python3 -I tools/wlctl.py "$CTL" tap "$((W / 2))" "$((H * 682 / 1000))"
   sleep 3
-  # phoc/Xwayland may choose a display other than :0. Reuse the server's
-  # actual display and authorization file from its argv (shared guest /proc).
-  xinfo=$(bash scripts/pc-guest.sh run /usr/bin/python3 -c '
-import glob, os, re, sys
-for p in glob.glob("/proc/[0-9]*/cmdline"):
-    try: a=open(p,"rb").read().decode(errors="replace").split("\\0")
-    except OSError: continue
-    if not a or not (a[0].endswith("/Xwayland") or a[0] == "Xwayland"): continue
-    display=next((x for x in a[1:] if re.fullmatch(r":[0-9]+",x)),None)
-    auth=next((a[i+1] for i,x in enumerate(a[:-1]) if x=="-auth"),None)
-    if display and auth: print(display+" "+auth); sys.exit(0)
-sys.exit("could not find Xwayland display/auth arguments")
-')
+  # phoc/Xwayland may choose a display other than :0. Read its argv from the
+  # host /proc (the guest has no python3), and only accept Xwayland descended
+  # from this guest process tree so a host desktop server cannot be selected.
+  xinfo=$(python3 -I - "$G_PID" <<'PY'
+import glob, re, sys
+
+root = int(sys.argv[1])
+children = {}
+for path in glob.glob("/proc/[0-9]*/stat"):
+    try:
+        raw = open(path).read()
+        # comm is parenthesized and can itself contain spaces or parentheses.
+        tail = raw[raw.rfind(")") + 2:].split()
+        pid = int(path.split("/")[2])
+        children[pid] = int(tail[1])
+    except (OSError, ValueError, IndexError):
+        continue
+
+def under_guest(pid):
+    seen = set()
+    while pid and pid not in seen:
+        if pid == root:
+            return True
+        seen.add(pid)
+        pid = children.get(pid, 0)
+    return False
+
+for path in glob.glob("/proc/[0-9]*/cmdline"):
+    try:
+        pid = int(path.split("/")[2])
+        if not under_guest(pid):
+            continue
+        args = open(path, "rb").read().decode(errors="replace").split("\0")
+    except (OSError, ValueError):
+        continue
+    if not args or not (args[0].endswith("/Xwayland") or args[0] == "Xwayland"):
+        continue
+    display = next((x for x in args[1:] if re.fullmatch(r":[0-9]+", x)), None)
+    auth = next((args[i + 1] for i, x in enumerate(args[:-1]) if x == "-auth"), None)
+    if display and auth:
+        print(display, auth)
+        sys.exit(0)
+sys.exit("could not find this guest's Xwayland display/auth arguments")
+PY
+)
   read -r XDISPLAY XAUTH < <(printf '%s\n' "$xinfo")
   log "Xwayland display $XDISPLAY auth $XAUTH"
   setsid bash scripts/pc-guest.sh run /usr/bin/env XDG_RUNTIME_DIR=/run/host-xdg DISPLAY="$XDISPLAY" XAUTHORITY="$XAUTH" \
