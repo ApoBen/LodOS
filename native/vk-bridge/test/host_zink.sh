@@ -54,8 +54,8 @@ EOF
     "$SRC/test/host_zink.c" -lEGL -lGLESv2 -o "$OUT/host_zink"
 
 srv_pid=""
+misses="$ROOT/build/vk-bridge/gdpa-misses.txt"
 cleanup() {
-    misses="$ROOT/build/vk-bridge/gdpa-misses.txt"
     mkdir -p "$(dirname "$misses")"
     cat "$OUT/eglinfo.err" "$OUT/zink.err" 2>/dev/null \
         | sed -n 's/^\[lodos-icd\] missing GDPA: //p' \
